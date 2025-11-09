@@ -1,0 +1,6 @@
+names:
+  0: polyp
+nc: 1
+path: E:\project\Endoscope_yolo\datasheet\Kvasir-SEG-YOLO
+train: images/train
+val: images/val

@@ -21,11 +21,11 @@ if not DATA_YAML.exists():
     print("请确保数据集已转换并配置文件已创建")
     sys.exit(1)
 
-# 构建训练命令
+# 构建训练命令（注意：切换到yolov5_project目录后，路径需要调整）
 train_cmd = [
     sys.executable,
-    str(YOLOV5_DIR / "train.py"),
-    "--data", str(DATA_YAML),
+    "train.py",  # 相对路径，因为会切换到yolov5_project目录
+    "--data", "data/Kvasir-SEG.yaml",  # 相对路径
     "--weights", WEIGHTS,
     "--img", str(IMG_SIZE),
     "--epochs", str(EPOCHS),
