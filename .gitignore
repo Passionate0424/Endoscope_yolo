@@ -1,0 +1,79 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+*.egg-info/
+dist/
+build/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# Virtual environments
+.venv*
+venv*/
+ENV*/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Model weights and checkpoints
+*.pt
+*.pth
+*.weights
+*.onnx
+*.engine
+*.pb
+*.h5
+*.tflite
+*.mlmodel
+*.mlpackage
+*.torchscript
+
+# Training outputs
+runs/
+wandb/
+*.log
+results*.csv
+
+# Datasets and images (uncomment if you don't want to track datasets)
+# *.jpg
+# *.jpeg
+# *.png
+# *.bmp
+# *.mp4
+# *.avi
+# *.mov
+
+# Data directories (uncomment if you don't want to track data)
+# data/images/*
+# data/labels/*
+# datasets/
+
+# Environment variables
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+
