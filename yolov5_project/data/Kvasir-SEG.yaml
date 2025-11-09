@@ -1,0 +1,10 @@
+# Kvasir-SEG dataset for YOLOv5
+# Path to dataset root (absolute path)
+path: E:\project\Endoscope_yolo\datasheet\Kvasir-SEG-YOLO
+train: images/train
+val: images/val
+
+# Classes
+names:
+  0: polyp
+nc: 1
