@@ -1,6 +1,11 @@
 """
 训练脚本 - 内窥镜息肉检测 YOLOv5 模型
 使用 Kvasir-SEG 数据集训练 YOLOv5 模型
+
+注意：YOLOv5 默认会启用 TensorBoard 日志记录
+训练完成后，可以使用以下命令查看 TensorBoard：
+    cd yolov5_project
+    tensorboard --logdir runs/train
 """
 import subprocess
 import sys
@@ -11,7 +16,7 @@ YOLOV5_DIR = Path("yolov5_project")
 DATA_YAML = YOLOV5_DIR / "data" / "Kvasir-SEG.yaml"
 WEIGHTS = "yolov5s.pt"  # 可选: yolov5n.pt, yolov5s.pt, yolov5m.pt, yolov5l.pt, yolov5x.pt
 IMG_SIZE = 640
-EPOCHS = 100
+EPOCHS = 1000
 BATCH_SIZE = 16
 DEVICE = ""  # 空字符串表示自动选择，或指定 "0", "0,1" 等
 
@@ -64,6 +69,10 @@ try:
         print("✅ 训练完成！")
         print("=" * 60)
         print(f"模型保存在: {YOLOV5_DIR / 'runs' / 'train' / 'endoscope_polyp_detection'}")
+        print(f"\n📊 查看 TensorBoard 可视化：")
+        print(f"   cd {YOLOV5_DIR}")
+        print(f"   tensorboard --logdir runs/train")
+        print(f"   然后在浏览器中打开: http://localhost:6006")
     else:
         print("\n" + "=" * 60)
         print("❌ 训练失败，请检查错误信息")

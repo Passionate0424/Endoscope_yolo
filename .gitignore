@@ -27,7 +27,6 @@ ENV*/
 *.swp
 *.swo
 *~
-.DS_Store
 
 # Model weights and checkpoints
 *.pt
@@ -47,6 +46,15 @@ runs/
 wandb/
 *.log
 results*.csv
+
+# YOLOv5 specific cache files
+*.cache
+*.npy
+
+# TensorBoard logs
+events.out.tfevents.*
+test_tb/
+*.tfevents.*
 
 # Datasets and images (uncomment if you don't want to track datasets)
 # *.jpg
@@ -75,5 +83,4 @@ desktop.ini
 *.tmp
 *.temp
 *.bak
-*.swp
 
