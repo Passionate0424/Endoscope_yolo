@@ -33,6 +33,14 @@ except ImportError:
 
 from http_server import HTTPServer
 
+# 尝试导入RTSP服务器（可选）
+try:
+    from rtsp_server import RTSPServer
+    RTSP_AVAILABLE = True
+except ImportError:
+    RTSP_AVAILABLE = False
+    print("注意: rtsp_server 模块不可用，将使用HTTP/MJPEG方式")
+
 # --------- 可按需修改的配置 ----------
 KMODEL_PATH = "/data/model.kmodel"          # 你的 kmodel 路径
 LABELS = ["polyp"]                          # 如果有多类别就扩展这个列表
@@ -48,6 +56,12 @@ DETECTIONS_DIR = "/data/detections"         # 检测图像保存目录
 ENABLE_DISPLAY = False                      # 是否显示到LCD/HDMI（False可节省资源）
 DETECTION_SKIP_FRAMES = 3                   # 每N帧检测一次（降低检测频率）
 VIDEO_SKIP_FRAMES = 0                       # 每N帧更新一次视频流（0=每帧都获取，降低可减少频率）
+
+# 视频流配置
+USE_RTSP = True                             # 是否使用RTSP推流（推荐，比MJPEG效率高）
+RTSP_PORT = 8554                            # RTSP端口
+RTSP_STREAM_NAME = "endoscope"              # RTSP流名称
+RTSP_VIDEO_TYPE = "h264"                    # 视频编码: "h264" 或 "h265"
 
 # 网络配置
 USE_WIFI = True                             # 是否使用WiFi（如果为False，则尝试以太网）
@@ -356,7 +370,7 @@ def format_detection_results(results):
 def main():
     # 初始化网络（必须在socket使用之前）
     if not init_network():
-        print("Warning: Network initialization failed. HTTP server may not work.")
+        print("Warning: Network initialization failed. Servers may not work.")
         print("Continuing without network...")
     
     # 初始化管道（如果禁用显示，使用None）
@@ -388,6 +402,32 @@ def main():
     http_server = HTTPServer(port=HTTP_PORT)
     http_server.start()
     
+    # 初始化RTSP服务器（如果启用）
+    rtsp_server = None
+    if USE_RTSP and RTSP_AVAILABLE:
+        print(f"尝试启动RTSP服务器...")
+        try:
+            rtsp_server = RTSPServer(
+                port=RTSP_PORT,
+                stream_name=RTSP_STREAM_NAME,
+                video_type=RTSP_VIDEO_TYPE
+            )
+            if rtsp_server.start(
+                width=RGB888P_SIZE[0],
+                height=RGB888P_SIZE[1],
+                fps=30,
+                bitrate=2000000
+            ):
+                print(f"✓ RTSP服务器启动成功")
+            else:
+                print(f"✗ RTSP服务器启动失败，将仅使用HTTP/MJPEG")
+                rtsp_server = None
+        except Exception as e:
+            print(f"RTSP服务器初始化失败: {e}")
+            rtsp_server = None
+    elif USE_RTSP and not RTSP_AVAILABLE:
+        print("注意: RTSP功能未启用（rtsp_server模块不可用）")
+    
     # 获取IP地址显示
     ip = "Unknown"
     global network_obj
@@ -414,6 +454,8 @@ def main():
     print(f"Display: {'Enabled' if ENABLE_DISPLAY else 'Disabled (resource saving mode)'}")
     print(f"Detection skip: Every {DETECTION_SKIP_FRAMES} frames")
     print(f"Video skip: Every {VIDEO_SKIP_FRAMES} frames")
+    
+    # 显示HTTP服务器信息
     if http_server.running and http_server.socket:
         try:
             server_ip = http_server.socket.getsockname()[0]
@@ -424,8 +466,15 @@ def main():
             print(f"HTTP服务器: http://{ip}:{HTTP_PORT}")
     else:
         print(f"HTTP服务器启动失败")
+    
+    # 显示RTSP服务器信息
+    if rtsp_server and rtsp_server.running:
+        print(f"RTSP视频流: rtsp://{ip}:{RTSP_PORT}/{RTSP_STREAM_NAME}")
+        print(f"  编码格式: {RTSP_VIDEO_TYPE.upper()}")
+        print(f"  使用VLC播放: vlc rtsp://{ip}:{RTSP_PORT}/{RTSP_STREAM_NAME}")
+    
     print(f"检测图像保存目录: {DETECTIONS_DIR}")
-    print("等待Web界面连接...")
+    print("等待连接...")
 
     try:
         while True:
@@ -442,69 +491,71 @@ def main():
                 
                 if should_get_frame:
                     try:
-                        with ScopedTiming("total", 1):
-                            # 获取视频帧
-                            frame = pl.get_frame()
+                        # 获取视频帧
+                        frame = pl.get_frame()
+                        
+                        # 更新HTTP服务器的当前帧（用于MJPEG视频流）
+                        if frame is not None:
+                            http_server.update_frame(frame)
                             
-                            # 立即更新HTTP服务器的当前帧（用于视频流）
-                            # 必须更新，否则MJPEG流会因为没有帧而退出
-                            if frame is not None:
-                                http_server.update_frame(frame)
-                                if frame_counter == 1 or frame_counter % 30 == 0:  # 第一帧和每30帧打印
-                                    print(f"Frame updated: {frame_counter}, frame type: {type(frame)}")
-                                    if hasattr(frame, 'shape'):
-                                        print(f"  Frame shape: {frame.shape}, dtype: {getattr(frame, 'dtype', 'N/A')}")
-                                    elif hasattr(frame, 'size'):
-                                        print(f"  Frame size: {frame.size()}")
-                                    elif hasattr(frame, 'width') and hasattr(frame, 'height'):
-                                        print(f"  Frame dimensions: {frame.width()}x{frame.height()}")
+                            # 注意: RTSP推流不需要手动推送帧
+                            # K230的RTSP服务器会自动从编码器获取数据并推流
                             
-                            # 是否进行YOLO检测（降低检测频率）
-                            results = None
-                            if http_server.detection_enabled:
-                                detection_frame_counter += 1
+                            if frame_counter == 1 or frame_counter % 30 == 0:  # 第一帧和每30帧打印
+                                print(f"Frame {frame_counter}: type={type(frame)}")
+                                if hasattr(frame, 'shape'):
+                                    print(f"  shape={frame.shape}, dtype={getattr(frame, 'dtype', 'N/A')}")
+                                elif hasattr(frame, 'size'):
+                                    print(f"  size={frame.size()}")
+                                elif hasattr(frame, 'width') and hasattr(frame, 'height'):
+                                    print(f"  dims={frame.width()}x{frame.height()}")
+                        
+                        # 是否进行YOLO检测（降低检测频率）
+                        results = None
+                        if http_server.detection_enabled:
+                            detection_frame_counter += 1
+                            
+                            # 每N帧检测一次
+                            if detection_frame_counter % (DETECTION_SKIP_FRAMES + 1) == 0:
+                                results = yolo.run(frame)
                                 
-                                # 每N帧检测一次
-                                if detection_frame_counter % (DETECTION_SKIP_FRAMES + 1) == 0:
-                                    results = yolo.run(frame)
+                                # 格式化检测结果
+                                formatted_results = format_detection_results(results)
+                                
+                                # 检查是否检测到息肉（新增检测）
+                                if formatted_results and len(formatted_results) > 0:
+                                    current_count = len(formatted_results)
                                     
-                                    # 格式化检测结果
-                                    formatted_results = format_detection_results(results)
-                                    
-                                    # 检查是否检测到息肉（新增检测）
-                                    if formatted_results and len(formatted_results) > 0:
-                                        current_count = len(formatted_results)
-                                        
-                                        # 如果检测到新的息肉，保存图像
-                                        if current_count > last_detection_count or current_count > 0:
-                                            # 保存检测图像（异步处理，避免阻塞）
-                                            try:
-                                                # 只保存一次，避免重复
-                                                if last_detection_count == 0:
-                                                    saved_frame = frame.copy() if hasattr(frame, 'copy') else frame
-                                                    
-                                                    saved_path = save_detection_image(
-                                                        saved_frame, 
-                                                        formatted_results, 
-                                                        DETECTIONS_DIR
-                                                    )
-                                                    
-                                                    if saved_path:
-                                                        http_server.add_detection(saved_frame, formatted_results)
-                                                        
-                                            except Exception as e:
-                                                print(f"Save detection error: {e}")
+                                    # 如果检测到新的息肉，保存图像
+                                    if current_count > last_detection_count or current_count > 0:
+                                        # 保存检测图像（异步处理，避免阻塞）
+                                        try:
+                                            # 只保存一次，避免重复
+                                            if last_detection_count == 0:
+                                                saved_frame = frame.copy() if hasattr(frame, 'copy') else frame
                                                 
-                                        last_detection_count = current_count
-                                        
-                                        # 在显示图像上绘制检测结果（如果启用显示）
-                                        if ENABLE_DISPLAY:
-                                            try:
-                                                yolo.draw_result(results, pl.osd_img)
-                                            except:
-                                                pass
-                                    else:
-                                        last_detection_count = 0
+                                                saved_path = save_detection_image(
+                                                    saved_frame, 
+                                                    formatted_results, 
+                                                    DETECTIONS_DIR
+                                                )
+                                                
+                                                if saved_path:
+                                                    http_server.add_detection(saved_frame, formatted_results)
+                                                    
+                                        except Exception as e:
+                                            print(f"Save detection error: {e}")
+                                            
+                                    last_detection_count = current_count
+                                    
+                                    # 在显示图像上绘制检测结果（如果启用显示）
+                                    if ENABLE_DISPLAY:
+                                        try:
+                                            yolo.draw_result(results, pl.osd_img)
+                                        except:
+                                            pass
+                                else:
+                                    last_detection_count = 0
                         
                         # 显示图像（如果启用显示，降低频率）
                         if ENABLE_DISPLAY and frame_counter % 2 == 0:
@@ -540,6 +591,11 @@ def main():
     finally:
         print("清理资源...")
         http_server.stop()
+        
+        # 停止RTSP服务器
+        if rtsp_server:
+            rtsp_server.stop()
+        
         yolo.deinit()
         pl.destroy()
         print("程序已退出")

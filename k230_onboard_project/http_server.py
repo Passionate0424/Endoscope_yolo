@@ -1,6 +1,7 @@
 """
 轻量级HTTP服务器模块
-用于K230 CanMV环境，提供Web API和MJPEG视频流
+用于K230 CanMV环境，提供Web API和RTSP视频流信息
+注意: MJPEG流已简化，推荐使用RTSP流
 """
 import socket
 import gc
@@ -242,249 +243,116 @@ class HTTPServer:
         self.send_response(client, HTTP_OK, "application/json", body)
         
     def handle_mjpeg_stream(self, client):
-        """处理MJPEG视频流（非阻塞方式）"""
-        # 发送多部分响应头
-        boundary = "----WebcamFrame"
-        header = "HTTP/1.1 200 OK\r\n"
-        header += "Content-Type: multipart/x-mixed-replace;boundary=" + boundary + "\r\n"
-        header += "Connection: keep-alive\r\n"
-        header += "\r\n"
+        """
+        处理MJPEG视频流请求
+        注意: 由于K230图像格式转换复杂,强烈建议使用RTSP流
+        此方法返回RTSP使用说明页面
+        """
+        # 发送RTSP使用说明页面
+        response = """HTTP/1.1 200 OK\r
+Content-Type: text/html; charset=utf-8\r
+Connection: close\r
+\r
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>视频流 - 建议使用RTSP</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            max-width: 800px; 
+            margin: 50px auto; 
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 { color: #333; }
+        .info { 
+            background: #e3f2fd; 
+            padding: 15px; 
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        .warning {
+            background: #fff3cd;
+            padding: 15px;
+            border-radius: 5px;
+            margin: 20px 0;
+            border-left: 4px solid #ffc107;
+        }
+        code {
+            background: #f5f5f5;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: monospace;
+        }
+        .btn {
+            display: inline-block;
+            padding: 10px 20px;
+            background: #007bff;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            margin: 10px 5px;
+        }
+        .btn:hover {
+            background: #0056b3;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📹 视频流访问</h1>
+        
+        <div class="warning">
+            <h3>⚠️ 注意</h3>
+            <p>由于K230平台的图像格式限制,MJPEG流转换较为复杂。</p>
+            <p><strong>强烈建议使用RTSP流以获得更好的性能和稳定性。</strong></p>
+        </div>
+        
+        <div class="info">
+            <h3>🎥 RTSP 视频流（推荐）</h3>
+            <p>RTSP URL: <code>rtsp://""" + self.get_server_ip() + """:8554/endoscope</code></p>
+            <h4>使用方法:</h4>
+            <ul>
+                <li><strong>VLC播放器:</strong> 打开网络流 → 输入上述URL</li>
+                <li><strong>ffplay:</strong> <code>ffplay rtsp://""" + self.get_server_ip() + """:8554/endoscope</code></li>
+                <li><strong>OBS Studio:</strong> 添加媒体源 → 输入URL</li>
+            </ul>
+        </div>
+        
+        <div style="text-align: center; margin-top: 30px;">
+            <a href="/" class="btn">返回主页</a>
+        </div>
+    </div>
+</body>
+</html>"""
         
         try:
-            # 设置client为非阻塞（如果支持）
-            try:
-                client.setblocking(False)
-            except:
-                pass
-            
-            # 发送响应头
-            try:
-                client.send(header.encode('utf-8'))
-                print("MJPEG stream header sent")
-            except Exception as e:
-                print(f"Failed to send MJPEG header: {e}")
-                return
-            
-            frame_count = 0
-            last_frame_time = 0
-            max_wait_no_frame = 50  # 最多等待50次（约5秒）没有帧
-            no_frame_count = 0
-            
-            # 限制循环次数，避免长时间阻塞
-            max_frames = 10000  # 最大帧数限制
-            frame_interval = 0.1  # 约10fps (1/10秒) - 降低帧率节省资源
-            
-            while self.running and self.video_enabled and frame_count < max_frames:
-                try:
-                    # 检查连接是否还活跃（简化检查）
-                    # 在MicroPython中可能不支持MSG_PEEK，直接发送测试
-                    # 如果连接断开会在send时抛出异常
-                    
-                    current_time = time.time()
-                    
-                    # 检查是否有新帧
-                    if self.last_frame is not None:
-                        # 检查帧是否更新（避免重复发送相同帧）
-                        if current_time - last_frame_time >= frame_interval:
-                            try:
-                                # 将图像转换为JPEG字节
-                                frame_jpeg = None
-                                conversion_method = None
-                                
-                                arr = self.last_frame
-                                
-                                # 根据日志，ndarray是CHW格式 (3, 360, 640)，需要转换为HWC格式 (360, 640, 3)
-                                # 方法1: 转置CHW到HWC，然后创建Image对象
-                                try:
-                                    import image
-                                    import ulab.numpy as np
-                                    
-                                    # 检查形状：如果是(CHW)格式 (C, H, W)，转置为(HWC)格式 (H, W, C)
-                                    if len(arr.shape) == 3 and arr.shape[0] == 3:
-                                        # CHW -> HWC: (3, 360, 640) -> (360, 640, 3)
-                                        # 使用transpose: (0,1,2) -> (1,2,0)
-                                        hwc_arr = np.transpose(arr, (1, 2, 0))
-                                        # 确保数据类型正确（如果需要）
-                                        if hasattr(hwc_arr, 'astype'):
-                                            try:
-                                                hwc_arr = hwc_arr.astype(np.uint8)
-                                            except:
-                                                pass
-                                        
-                                        # 创建Image对象（CanMV可能需要size参数）
-                                        try:
-                                            img = image.Image(size=(hwc_arr.shape[1], hwc_arr.shape[0]), copy_to_fb=False)
-                                            # 将数据复制到图像对象
-                                            img.set_pixels(hwc_arr)
-                                            if hasattr(img, 'to_jpeg'):
-                                                frame_jpeg = img.to_jpeg(quality=60)
-                                                conversion_method = "CHW_to_HWC_set_pixels_to_jpeg"
-                                        except Exception as e_img:
-                                            # 如果set_pixels失败，尝试直接传递ndarray
-                                            try:
-                                                img = image.Image(hwc_arr, copy_to_fb=False)
-                                                if hasattr(img, 'to_jpeg'):
-                                                    frame_jpeg = img.to_jpeg(quality=60)
-                                                    conversion_method = "CHW_to_HWC_Image_to_jpeg"
-                                            except:
-                                                # 尝试compress方法
-                                                try:
-                                                    img = image.Image(hwc_arr, copy_to_fb=False)
-                                                    if hasattr(img, 'compress'):
-                                                        frame_jpeg = img.compress(quality=60)
-                                                        conversion_method = "CHW_to_HWC_Image_compress"
-                                                except:
-                                                    pass
-                                except Exception as e1:
-                                    if frame_count == 0:
-                                        print(f"CHW to HWC conversion failed: {e1}")
-                                
-                                # 方法2: 尝试直接使用原始数组（如果已经是HWC格式）
-                                if frame_jpeg is None:
-                                    try:
-                                        import image
-                                        # 检查是否是HWC格式 (H, W, C)
-                                        if len(arr.shape) == 3 and arr.shape[2] == 3:
-                                            try:
-                                                img = image.Image(size=(arr.shape[1], arr.shape[0]), copy_to_fb=False)
-                                                img.set_pixels(arr)
-                                                if hasattr(img, 'to_jpeg'):
-                                                    frame_jpeg = img.to_jpeg(quality=60)
-                                                    conversion_method = "HWC_set_pixels_to_jpeg"
-                                            except:
-                                                try:
-                                                    img = image.Image(arr, copy_to_fb=False)
-                                                    if hasattr(img, 'to_jpeg'):
-                                                        frame_jpeg = img.to_jpeg(quality=60)
-                                                        conversion_method = "HWC_Image_to_jpeg"
-                                                except:
-                                                    pass
-                                    except Exception as e2:
-                                        if frame_count == 0:
-                                            print(f"Direct HWC conversion failed: {e2}")
-                                
-                                # 打印ndarray的详细信息用于调试（在转换失败时，仅在前几次打印详细内容）
-                                if frame_jpeg is None:
-                                    arr = self.last_frame
-                                    # 只在第一次或前几次失败时打印详细信息，避免输出过多
-                                    print_debug_details = (frame_count == 0 and no_frame_count < 3)
-                                    if print_debug_details:
-                                        print(f"=== Image Conversion Debug Info (frame_count={frame_count}, no_frame_count={no_frame_count}) ===")
-                                        print(f"Frame type: {type(arr)}")
-                                        print(f"NDArray shape: {arr.shape if hasattr(arr, 'shape') else 'N/A'}")
-                                        print(f"NDArray dtype: {arr.dtype if hasattr(arr, 'dtype') else 'N/A'}")
-                                        print(f"NDArray size: {arr.size if hasattr(arr, 'size') else 'N/A'}")
-                                        if hasattr(arr, '__class__'):
-                                            print(f"NDArray class: {arr.__class__}")
-                                        if hasattr(arr, '__class__') and hasattr(arr.__class__, '__name__'):
-                                            print(f"NDArray class name: {arr.__class__.__name__}")
-                                        
-                                        # 打印对象的所有方法
-                                        print(f"Available methods on frame object:")
-                                        try:
-                                            methods = [m for m in dir(arr) if not m.startswith('_')]
-                                            for i, method in enumerate(methods[:20]):  # 只显示前20个方法
-                                                print(f"  {method}")
-                                            if len(methods) > 20:
-                                                print(f"  ... and {len(methods) - 20} more methods")
-                                        except Exception as e:
-                                            print(f"  Could not list methods: {e}")
-                                        
-                                        # 尝试找到image模块并检查其功能
-                                        try:
-                                            import image
-                                            print(f"image module found: {hasattr(image, 'Image')}")
-                                            if hasattr(image, 'Image'):
-                                                print(f"image.Image class: {image.Image}")
-                                                # 尝试创建一个测试Image对象以查看其方法
-                                                try:
-                                                    test_img_methods = [m for m in dir(image.Image) if not m.startswith('_')]
-                                                    print(f"image.Image available methods: {', '.join(test_img_methods[:10])}")
-                                                except:
-                                                    pass
-                                        except Exception as e:
-                                            print(f"image module check failed: {e}")
-                                        
-                                        # 检查ulab.numpy模块
-                                        try:
-                                            import ulab.numpy as np
-                                            print(f"ulab.numpy available: {hasattr(np, 'transpose')}, {hasattr(np, 'uint8')}")
-                                        except Exception as e:
-                                            print(f"ulab.numpy check failed: {e}")
-                                        
-                                        print("=" * 60)
-                                    else:
-                                        # 简要信息
-                                        if no_frame_count % 10 == 0:  # 每10次打印一次简要信息
-                                            print(f"MJPEG: Still trying to convert frame... (attempt {no_frame_count})")
-                                
-                                # 如果成功获取JPEG数据，发送帧
-                                if frame_jpeg is not None and isinstance(frame_jpeg, bytes) and len(frame_jpeg) > 0:
-                                    try:
-                                        self.send_mjpeg_frame(client, frame_jpeg)
-                                        last_frame_time = current_time
-                                        frame_count += 1
-                                        no_frame_count = 0
-                                        
-                                        # 第一次成功时打印方法
-                                        if frame_count == 1:
-                                            print(f"MJPEG: First frame sent using {conversion_method}, size: {len(frame_jpeg)} bytes")
-                                        
-                                        # 每100帧输出一次日志
-                                        if frame_count % 100 == 0:
-                                            print(f"MJPEG: Sent {frame_count} frames")
-                                            gc.collect()
-                                    except Exception as e:
-                                        print(f"Send frame error: {e}")
-                                        break
-                                else:
-                                    no_frame_count += 1
-                                    if frame_count == 0 and no_frame_count == 1:
-                                        print(f"MJPEG: Image conversion failed after all attempts.")
-                                        print(f"  Frame type: {type(self.last_frame)}")
-                                        print(f"  Frame value: {self.last_frame}")
-                                        print(f"  frame_jpeg value: {frame_jpeg}")
-                                        print(f"  frame_jpeg type: {type(frame_jpeg)}")
-                                        if frame_jpeg is not None:
-                                            print(f"  frame_jpeg length: {len(frame_jpeg)}")
-                                        print(f"  Has to_jpeg: {hasattr(self.last_frame, 'to_jpeg')}")
-                                        print(f"  Has compress: {hasattr(self.last_frame, 'compress')}")
-                                        print(f"  Has save_to: {hasattr(self.last_frame, 'save_to')}")
-                                    if no_frame_count > max_wait_no_frame:
-                                        print("MJPEG: No valid frame data, stopping stream")
-                                        break
-                                    time.sleep(0.05)
-                                    
-                            except Exception as e:
-                                print(f"MJPEG frame processing error: {e}")
-                                no_frame_count += 1
-                                if no_frame_count > max_wait_no_frame:
-                                    break
-                                time.sleep(0.05)
-                        else:
-                            # 帧间隔不够，短暂休眠
-                            time.sleep(0.01)
-                    else:
-                        # 没有帧，等待
-                        no_frame_count += 1
-                        if no_frame_count > max_wait_no_frame:
-                            print("MJPEG: No frame available, stopping stream")
-                            # 发送一个占位符帧或错误信息
-                            break
-                        time.sleep(0.1)
-                        
-                except Exception as e:
-                    print(f"MJPEG stream loop error: {e}")
-                    break
-                    
+            client.send(response.encode('utf-8'))
+            print("MJPEG路径访问 - 已返回RTSP使用说明")
         except Exception as e:
-            print(f"MJPEG stream connection error: {e}")
+            print(f"Send MJPEG info error: {e}")
         finally:
             try:
-                print(f"MJPEG stream ended, total frames: {frame_count}")
                 client.close()
             except:
                 pass
+    
+    def get_server_ip(self):
+        """获取服务器IP地址"""
+        try:
+            if self.socket:
+                return self.socket.getsockname()[0]
+        except:
+            pass
+        return "设备IP"
                 
     def serve_html(self, client):
         """提供HTML页面"""
@@ -677,7 +545,27 @@ class HTTPServer:
         <div class="content">
             <div class="video-section">
                 <div class="video-container">
-                    <img id="videoStream" src="/api/video/stream" alt="视频流">
+                    <!-- MJPEG 视频流 (默认) -->
+                    <img id="videoStream" src="/api/video/stream" alt="视频流" style="display:block;">
+                    
+                    <!-- RTSP 视频流 (需要支持的浏览器插件或原生播放器) -->
+                    <div id="rtspContainer" style="display:none;">
+                        <video id="rtspVideo" controls autoplay muted style="width:100%; height:100%; background:#000;">
+                            您的浏览器不支持视频播放
+                        </video>
+                        <p style="text-align:center; margin-top:10px; color:#666; font-size:0.9em;">
+                            提示: RTSP需要使用VLC等播放器<br>
+                            <code id="rtspUrl" style="background:#f5f5f5; padding:5px; border-radius:3px;"></code>
+                        </p>
+                    </div>
+                </div>
+                <div style="margin-top:10px; text-align:center;">
+                    <label>
+                        <input type="radio" name="streamType" value="mjpeg" checked> MJPEG (浏览器)
+                    </label>
+                    <label style="margin-left:15px;">
+                        <input type="radio" name="streamType" value="rtsp"> RTSP (VLC/ffplay)
+                    </label>
                 </div>
             </div>
             <div class="controls">
@@ -804,6 +692,32 @@ class HTTPServer:
         document.getElementById('btnDisableDetection').addEventListener('click', async () => {
             await apiCall('/api/detection/disable', 'POST');
             updateStatus();
+        });
+        
+        // 流类型切换
+        document.querySelectorAll('input[name="streamType"]').forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                const streamType = e.target.value;
+                const mjpegStream = document.getElementById('videoStream');
+                const rtspContainer = document.getElementById('rtspContainer');
+                const rtspUrl = document.getElementById('rtspUrl');
+                
+                if (streamType === 'mjpeg') {
+                    mjpegStream.style.display = 'block';
+                    rtspContainer.style.display = 'none';
+                } else {
+                    mjpegStream.style.display = 'none';
+                    rtspContainer.style.display = 'block';
+                    
+                    // 获取当前主机IP并构建RTSP URL
+                    const hostname = window.location.hostname;
+                    const rtspUrlStr = `rtsp://${hostname}:8554/endoscope`;
+                    rtspUrl.textContent = rtspUrlStr;
+                    
+                    // 提示用户使用外部播放器
+                    alert('RTSP流需要使用专业播放器\\n\\nVLC: ' + rtspUrlStr + '\\nffplay: ffplay ' + rtspUrlStr);
+                }
+            });
         });
         
         // 初始化
