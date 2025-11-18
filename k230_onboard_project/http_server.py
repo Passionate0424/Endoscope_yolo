@@ -370,49 +370,53 @@ class HTTPServer:
                                     print_debug_details = (frame_count == 0 and no_frame_count < 3)
                                     if print_debug_details:
                                         print(f"=== Image Conversion Debug Info (frame_count={frame_count}, no_frame_count={no_frame_count}) ===")
-                                    print(f"Frame type: {type(arr)}")
-                                    print(f"NDArray shape: {arr.shape if hasattr(arr, 'shape') else 'N/A'}")
-                                    print(f"NDArray dtype: {arr.dtype if hasattr(arr, 'dtype') else 'N/A'}")
-                                    print(f"NDArray size: {arr.size if hasattr(arr, 'size') else 'N/A'}")
-                                    if hasattr(arr, '__class__'):
-                                        print(f"NDArray class: {arr.__class__}")
-                                    if hasattr(arr, '__class__') and hasattr(arr.__class__, '__name__'):
-                                        print(f"NDArray class name: {arr.__class__.__name__}")
-                                    
-                                    # 打印对象的所有方法
-                                    print(f"Available methods on frame object:")
-                                    try:
-                                        methods = [m for m in dir(arr) if not m.startswith('_')]
-                                        for i, method in enumerate(methods[:20]):  # 只显示前20个方法
-                                            print(f"  {method}")
-                                        if len(methods) > 20:
-                                            print(f"  ... and {len(methods) - 20} more methods")
-                                    except Exception as e:
-                                        print(f"  Could not list methods: {e}")
-                                    
-                                    # 尝试找到image模块并检查其功能
-                                    try:
-                                        import image
-                                        print(f"image module found: {hasattr(image, 'Image')}")
-                                        if hasattr(image, 'Image'):
-                                            print(f"image.Image class: {image.Image}")
-                                            # 尝试创建一个测试Image对象以查看其方法
-                                            try:
-                                                test_img_methods = [m for m in dir(image.Image) if not m.startswith('_')]
-                                                print(f"image.Image available methods: {', '.join(test_img_methods[:10])}")
-                                            except:
-                                                pass
-                                    except Exception as e:
-                                        print(f"image module check failed: {e}")
-                                    
-                                    # 检查ulab.numpy模块
-                                    try:
-                                        import ulab.numpy as np
-                                        print(f"ulab.numpy available: {hasattr(np, 'transpose')}, {hasattr(np, 'uint8')}")
-                                    except Exception as e:
-                                        print(f"ulab.numpy check failed: {e}")
-                                    
-                                    print("=" * 60)
+                                        print(f"Frame type: {type(arr)}")
+                                        print(f"NDArray shape: {arr.shape if hasattr(arr, 'shape') else 'N/A'}")
+                                        print(f"NDArray dtype: {arr.dtype if hasattr(arr, 'dtype') else 'N/A'}")
+                                        print(f"NDArray size: {arr.size if hasattr(arr, 'size') else 'N/A'}")
+                                        if hasattr(arr, '__class__'):
+                                            print(f"NDArray class: {arr.__class__}")
+                                        if hasattr(arr, '__class__') and hasattr(arr.__class__, '__name__'):
+                                            print(f"NDArray class name: {arr.__class__.__name__}")
+                                        
+                                        # 打印对象的所有方法
+                                        print(f"Available methods on frame object:")
+                                        try:
+                                            methods = [m for m in dir(arr) if not m.startswith('_')]
+                                            for i, method in enumerate(methods[:20]):  # 只显示前20个方法
+                                                print(f"  {method}")
+                                            if len(methods) > 20:
+                                                print(f"  ... and {len(methods) - 20} more methods")
+                                        except Exception as e:
+                                            print(f"  Could not list methods: {e}")
+                                        
+                                        # 尝试找到image模块并检查其功能
+                                        try:
+                                            import image
+                                            print(f"image module found: {hasattr(image, 'Image')}")
+                                            if hasattr(image, 'Image'):
+                                                print(f"image.Image class: {image.Image}")
+                                                # 尝试创建一个测试Image对象以查看其方法
+                                                try:
+                                                    test_img_methods = [m for m in dir(image.Image) if not m.startswith('_')]
+                                                    print(f"image.Image available methods: {', '.join(test_img_methods[:10])}")
+                                                except:
+                                                    pass
+                                        except Exception as e:
+                                            print(f"image module check failed: {e}")
+                                        
+                                        # 检查ulab.numpy模块
+                                        try:
+                                            import ulab.numpy as np
+                                            print(f"ulab.numpy available: {hasattr(np, 'transpose')}, {hasattr(np, 'uint8')}")
+                                        except Exception as e:
+                                            print(f"ulab.numpy check failed: {e}")
+                                        
+                                        print("=" * 60)
+                                    else:
+                                        # 简要信息
+                                        if no_frame_count % 10 == 0:  # 每10次打印一次简要信息
+                                            print(f"MJPEG: Still trying to convert frame... (attempt {no_frame_count})")
                                 
                                 # 如果成功获取JPEG数据，发送帧
                                 if frame_jpeg is not None and isinstance(frame_jpeg, bytes) and len(frame_jpeg) > 0:

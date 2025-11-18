@@ -59,8 +59,8 @@
 
 - **训练指南**：`docs/README_TRAINING.md`
 - **K230 模型导出说明**：`docs/README_K230_EXPORT.md`
-- **K230 设备端应用说明**：`docs/k230_onboard_project/README.md`
-- **数据集与标注说明**：`docs/datasheet/README.md`（如需查看原始数据组织）
+- **K230 设备端应用说明**：`k230_onboard_project/README.md`
+- **数据集与标注说明**：`datasheet/README.md`（如需查看原始数据组织）
 - **模型转换完成记录/备注**：`docs/KMODEL_CONVERSION_COMPLETE.md`
 
 如需了解 YOLOv5 本身的更多用法，可参考：
