@@ -72,3 +72,8 @@ ncc compile ".\build\k230\onnx\your.onnx" ".\build\k230\model.kmodel" `
 
 
 
+
+
+
+
+
