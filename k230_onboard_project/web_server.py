@@ -85,6 +85,9 @@ class HTTPServer:
             except Exception as e:
                 if self.running:
                     print(f"接受连接错误: {e}")
+                # 发生异常后也让出CPU
+                import utime
+                utime.sleep_ms(10)
         
     def stop(self):
         """停止服务器"""
@@ -107,9 +110,7 @@ class HTTPServer:
         
         try:
             print(f"[连接#{conn_id}] 新连接: {addr}")
-            # 大幅减少超时时间，避免不必要的等待
-            # 3秒太长了，改为0.5秒
-            client_socket.settimeout(0.5)
+            client_socket.settimeout(2.0)
             
             # Keep-Alive 循环
             while request_count < max_requests:

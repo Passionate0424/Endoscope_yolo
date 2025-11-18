@@ -170,71 +170,82 @@ class YOLOController:
             
             print("[YOLO线程] 进入主循环")
             
+            # 添加循环计数器
+            loop_iteration = 0
+            
             while not self.stop_flag:
-                # 关闭ScopedTiming的打印输出,避免串口阻塞
-                # 参数1改为0,禁用每帧的耗时打印
-                with ScopedTiming("total", 0):
-                    # 获取图像
-                    frame = pl.get_frame()
+                loop_iteration += 1
+                
+                # 每100次循环打印一次
+                if loop_iteration % 100 == 0:
+                    print(f"[YOLO] 循环 #{loop_iteration}, FPS: {self.stats['fps']:.1f}")
+                
+                # 获取图像
+                frame = pl.get_frame()
+                
+                # ⚠️ 关键：获取帧后立即让出CPU
+                time.sleep(0.2)  # 200ms
+                
+                if frame is None:
+                    print("[YOLO线程] 警告: 获取帧失败")
+                    time.sleep(0.2)
+                    continue
                     
-                    if frame is None:
-                        print("[YOLO线程] 警告: 获取帧失败")
-                        continue
-                        
-                    # 更新统计
-                    frame_count += 1
-                    debug_frame_count += 1
-                    self.stats['total_frames'] += 1
-                    
-                    # 计算FPS
-                    if frame_count >= 30:
-                        elapsed = time.time() - start_time
+                # 更新统计
+                frame_count += 1
+                debug_frame_count += 1
+                self.stats['total_frames'] += 1
+
+                # 计算FPS
+                if frame_count >= 30:
+                    elapsed = time.time() - start_time
+                    if elapsed > 0:
                         self.stats['fps'] = frame_count / elapsed
-                        frame_count = 0
-                        start_time = time.time()
+                    frame_count = 0
+                    start_time = time.time()
                     
-                    # YOLO检测
-                    results = None
-                    if self.detection_enabled:
-                        # 关闭YOLO推理耗时打印,避免阻塞
-                        with ScopedTiming("YOLO inference", 0):
-                            results = yolo_detector.run(frame)
-                            
-                        # 绘制检测结果到osd_img
-                        if results:
-                            yolo_detector.draw_result(results, pl.osd_img)
-                            
-                            # 处理检测结果（检查是否有息肉检测）
-                            # results格式: list of detections
-                            for det in results:
-                                # 更新统计
-                                self.stats['total_detections'] += 1
-                                
-                                # 调用检测回调（保存图像等）
-                                if self.detection_callback:
-                                    try:
-                                        # 从frame获取完整图像用于保存
-                                        self.detection_callback(frame, det, 0.0)
-                                    except Exception as e:
-                                        print(f"检测回调错误: {e}")
+                # YOLO检测
+                results = None
+                if self.detection_enabled:
+                    # 执行YOLO推理
+                    results = yolo_detector.run(frame)
                     
-                    # 更新视频流帧 - 始终发送osd_img
-                    if self.frame_callback:
-                        try:
-                            # pl.osd_img 包含了绘制的结果（如果有检测）或原始图像
-                            self.frame_callback(pl.osd_img)
+                    # 绘制检测结果到osd_img
+                    if results:
+                        yolo_detector.draw_result(results, pl.osd_img)
+                        
+                        # 处理检测结果（检查是否有息肉检测）
+                        for det in results:
+                            # 更新统计
+                            self.stats['total_detections'] += 1
                             
-                            # 调试：每100帧打印一次,减少串口输出
-                            if debug_frame_count % 100 == 0:
-                                print(f"[YOLO] 已处理 {debug_frame_count} 帧, FPS: {self.stats['fps']:.1f}")
-                        except Exception as e:
-                            print(f"帧回调错误: {e}")
-                    
-                    # 显示到屏幕
+                            # 调用检测回调（保存图像等）
+                            if self.detection_callback:
+                                try:
+                                    # 使用 pl.osd_img（Image对象）而不是 frame（ndarray）
+                                    self.detection_callback(pl.osd_img, det, 0.0)
+                                except Exception as e:
+                                    print(f"检测回调错误: {e}")
+                
+                # 更新视频流帧 - 始终发送osd_img
+                if self.frame_callback:
+                    try:
+                        self.frame_callback(pl.osd_img)
+                    except Exception as e:
+                        print(f"帧回调错误: {e}")
+                
+                # 显示到屏幕
+                try:
                     pl.show_image()
-                    
-                    # 内存管理
+                except Exception as e:
+                    if debug_frame_count % 100 == 0:
+                        print(f"[YOLO] 显示错误: {e}")
+                
+                # 内存管理
+                if debug_frame_count % 100 == 0:
                     gc.collect()
+                
+                # 循环末尾不需要额外sleep，主要让出在get_frame后
             
             print("[YOLO线程] 主循环正常结束")
                     

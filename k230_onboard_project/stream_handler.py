@@ -64,14 +64,14 @@ class MJPEGStreamer:
                     # 减少等待日志输出,从每20次改为每100次
                     if wait_count % 100 == 0:
                         print(f"[Stream] 等待帧数据... ({wait_count * 0.05:.1f}s)")
-                    time.sleep(0.05)
+                    time.sleep(0.05)  # 50ms等待
                     continue
                     
                 current_time = time.time()
                 
                 # 帧率控制
                 if current_time - last_sent_time < self.frame_interval:
-                    time.sleep(0.01)
+                    time.sleep(0.01)  # 10ms等待
                     continue
                 
                 try:
@@ -113,22 +113,37 @@ class MJPEGStreamer:
                 pass
                 
     def compress_frame(self, image):
-        """压缩图像为JPEG"""
+        """压缩图像为JPEG - 支持K230图像对象和ndarray"""
         try:
-            # K230 image 模块的 compressed 方法
-            if hasattr(image, 'compressed'):
-                # compressed() 返回压缩后的数据
+            # 方法1: 检查是否有 to_jpeg 方法 (K230 Image对象的标准方法)
+            if hasattr(image, 'to_jpeg'):
+                # to_jpeg()返回一个新的JPEG格式Image对象
+                jpeg_img = image.to_jpeg(quality=self.quality)
+                # compressed()方法返回压缩后的字节数据
+                if hasattr(jpeg_img, 'compressed'):
+                    return bytes(jpeg_img.compressed())
+                else:
+                    return bytes(jpeg_img)
+            
+            # 方法2: 检查是否有 compressed 方法 (旧版API)
+            elif hasattr(image, 'compressed'):
                 compressed_data = image.compressed(quality=self.quality)
-                # 直接返回 bytes
                 return bytes(compressed_data)
+            
             else:
-                print(f"图像对象不支持压缩: {type(image)}")
+                # 只在第一次打印错误,避免刷屏
+                if not hasattr(self, '_compress_error_printed'):
+                    print(f"[Stream] ❌ 图像对象不支持压缩: {type(image)}")
+                    print(f"[Stream] 可用方法: {dir(image)[:10]}...")  # 打印前10个方法
+                    self._compress_error_printed = True
                 return None
                 
         except Exception as e:
-            print(f"压缩图像失败: {e}")
-            import sys
-            sys.print_exception(e)
+            if not hasattr(self, '_compress_exception_printed'):
+                print(f"[Stream] 压缩图像失败: {e}")
+                import sys
+                sys.print_exception(e)
+                self._compress_exception_printed = True
             return None
             
     def set_quality(self, quality):
