@@ -110,7 +110,7 @@ class HTTPServer:
         
         try:
             print(f"[连接#{conn_id}] 新连接: {addr}")
-            client_socket.settimeout(2.0)
+            client_socket.settimeout(0.5)  # 减少到0.5秒,加快响应
             
             # Keep-Alive 循环
             while request_count < max_requests:

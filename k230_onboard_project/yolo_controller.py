@@ -184,11 +184,12 @@ class YOLOController:
                 frame = pl.get_frame()
                 
                 # ⚠️ 关键：获取帧后立即让出CPU
-                time.sleep(0.2)  # 200ms
+                # 调整为50ms以提高HTTP响应速度
+                time.sleep(0.05)  # 50ms - 约20fps (如果处理够快)
                 
                 if frame is None:
                     print("[YOLO线程] 警告: 获取帧失败")
-                    time.sleep(0.2)
+                    time.sleep(0.1)
                     continue
                     
                 # 更新统计
