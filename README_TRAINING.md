@@ -14,7 +14,9 @@ Endoscope_yolo/
 │       └── labels/
 │           ├── train/       # 880个训练标注
 │           └── val/         # 120个验证标注
-└── train_endoscope_yolo.py  # 训练脚本
+└── scripts/
+    └── training/
+        └── train_endoscope_yolo.py  # 训练脚本
 ```
 
 ## 环境要求
@@ -48,7 +50,7 @@ Endoscope_yolo/
 conda activate pytorch_env
 
 # 运行训练脚本
-python train_endoscope_yolo.py
+python scripts/training/train_endoscope_yolo.py
 ```
 
 ### 方法2: 直接使用train.py

@@ -51,7 +51,7 @@ build/k230_pytorch_env/
 
 ```powershell
 conda activate pytorch_env
-pwsh -File .\convert_to_kmodel.ps1 `
+pwsh -File .\scripts\conversion\convert_to_kmodel.ps1 `
   -OnnxPath ".\build\k230_pytorch_env\onnx\best.onnx" `
   -CalibDir ".\build\k230_pytorch_env\calib" `
   -InputWidth 640 `
@@ -121,8 +121,8 @@ python test_yolov5\detect\test_det_kmodel.py
 
 ## 相关文件
 
-- `export_to_kmodel_k230.ps1`: ONNX导出和校准集准备脚本
-- `convert_to_kmodel.ps1`: kmodel转换脚本包装器
+- `scripts/conversion/export_to_kmodel_k230.ps1`: ONNX导出和校准集准备脚本
+- `scripts/conversion/convert_to_kmodel.ps1`: kmodel转换脚本包装器
 - `test_yolov5/detect/to_kmodel.py`: 官方转换脚本
 - `README_K230_EXPORT.md`: 详细的转换文档
 

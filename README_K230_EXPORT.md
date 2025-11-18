@@ -7,7 +7,7 @@
 在 PowerShell 中运行：
 
 ```bash
-pwsh -File .\export_to_kmodel_k230.ps1 `
+pwsh -File .\scripts\conversion\export_to_kmodel_k230.ps1 `
   -WeightsPath ".\yolov5_project\runs\train\endoscope_polyp_detection5\weights\best.pt" `
   -ImgSize 640 `
   -OutputDir ".\build\k230" `
