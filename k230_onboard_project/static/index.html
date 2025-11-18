@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>内窥镜检测平台</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        header {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+        }
+
+        header h1 {
+            font-size: 2.5em;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 2fr 1fr;
+            gap: 20px;
+        }
+
+        .panel {
+            background: white;
+            border-radius: 12px;
+            padding: 20px;
+            box-shadow: 0 8px 16px rgba(0, 0, 0, 0.2);
+        }
+
+        .panel h2 {
+            color: #667eea;
+            margin-bottom: 15px;
+            border-bottom: 2px solid #667eea;
+            padding-bottom: 10px;
+        }
+
+        /* 视频区域 */
+        .video-panel {
+            grid-row: span 2;
+        }
+
+        .video-container {
+            position: relative;
+            background: #000;
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 15px;
+        }
+
+        .video-stream {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+
+        .video-placeholder {
+            width: 100%;
+            aspect-ratio: 16/9;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #666;
+            font-size: 1.2em;
+        }
+
+        .status-indicator {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.9em;
+            font-weight: bold;
+            background: rgba(0, 0, 0, 0.7);
+            color: white;
+        }
+
+        .status-indicator.active {
+            background: #4CAF50;
+        }
+
+        .status-indicator.inactive {
+            background: #f44336;
+        }
+
+        /* 控制面板 */
+        .controls {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .control-group {
+            margin-bottom: 15px;
+        }
+
+        .control-group label {
+            display: block;
+            margin-bottom: 5px;
+            color: #333;
+            font-weight: 500;
+        }
+
+        button {
+            width: 100%;
+            padding: 12px;
+            border: none;
+            border-radius: 6px;
+            font-size: 1em;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
+        }
+
+        button:active {
+            transform: translateY(0);
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5568d3;
+        }
+
+        .btn-success {
+            background: #4CAF50;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background: #45a049;
+        }
+
+        .btn-danger {
+            background: #f44336;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #da190b;
+        }
+
+        input[type="range"] {
+            width: 100%;
+            margin: 10px 0;
+        }
+
+        .slider-value {
+            text-align: center;
+            color: #667eea;
+            font-weight: bold;
+            font-size: 1.1em;
+        }
+
+        /* 统计信息 */
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 10px;
+        }
+
+        .stat-item {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-value {
+            font-size: 2em;
+            font-weight: bold;
+        }
+
+        .stat-label {
+            font-size: 0.9em;
+            opacity: 0.9;
+        }
+
+        /* 检测记录 */
+        .detection-list {
+            max-height: 500px;
+            overflow-y: auto;
+        }
+
+        .detection-item {
+            display: flex;
+            align-items: center;
+            padding: 10px;
+            border-bottom: 1px solid #eee;
+            transition: background 0.2s;
+        }
+
+        .detection-item:hover {
+            background: #f5f5f5;
+        }
+
+        .detection-thumb {
+            width: 80px;
+            height: 60px;
+            object-fit: cover;
+            border-radius: 4px;
+            margin-right: 15px;
+        }
+
+        .detection-info {
+            flex: 1;
+        }
+
+        .detection-time {
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .detection-confidence {
+            display: inline-block;
+            padding: 2px 8px;
+            background: #4CAF50;
+            color: white;
+            border-radius: 12px;
+            font-size: 0.8em;
+            margin-top: 5px;
+        }
+
+        .detection-actions {
+            display: flex;
+            gap: 5px;
+        }
+
+        .btn-small {
+            padding: 6px 12px;
+            font-size: 0.9em;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 40px;
+            color: #999;
+        }
+
+        /* 响应式设计 */
+        @media (max-width: 1024px) {
+            .main-content {
+                grid-template-columns: 1fr;
+            }
+
+            .video-panel {
+                grid-row: span 1;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <header>
+            <h1>🔬 内窥镜检测平台</h1>
+            <p>实时息肉检测与监控系统</p>
+        </header>
+
+        <div class="main-content">
+            <!-- 视频显示区 -->
+            <div class="panel video-panel">
+                <h2>实时视频</h2>
+                <div class="video-container">
+                    <img id="videoStream" class="video-stream" style="display:none;">
+                    <div id="videoPlaceholder" class="video-placeholder">
+                        摄像头未启动
+                    </div>
+                    <div id="statusIndicator" class="status-indicator inactive">离线</div>
+                </div>
+
+                <div class="controls">
+                    <button id="btnStartCamera" class="btn-success">启动摄像头</button>
+                    <button id="btnStopCamera" class="btn-danger">停止摄像头</button>
+                    <button id="btnEnableDetection" class="btn-primary">启用检测</button>
+                    <button id="btnDisableDetection" class="btn-danger">禁用检测</button>
+                </div>
+
+                <div class="control-group">
+                    <label>置信度阈值: <span id="confidenceValue" class="slider-value">0.50</span></label>
+                    <input type="range" id="confidenceSlider" min="10" max="95" value="50" step="5">
+                </div>
+            </div>
+
+            <!-- 统计信息 -->
+            <div class="panel">
+                <h2>运行统计</h2>
+                <div class="stats-grid">
+                    <div class="stat-item">
+                        <div class="stat-value" id="statFps">0</div>
+                        <div class="stat-label">FPS</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="statDetections">0</div>
+                        <div class="stat-label">检测总数</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="statFrames">0</div>
+                        <div class="stat-label">处理帧数</div>
+                    </div>
+                    <div class="stat-item">
+                        <div class="stat-value" id="statRecords">0</div>
+                        <div class="stat-label">保存记录</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 检测记录 -->
+            <div class="panel">
+                <h2>检测记录</h2>
+                <div style="margin-bottom: 10px;">
+                    <button id="btnRefreshRecords" class="btn-primary btn-small"
+                        style="width: auto; display: inline-block;">刷新</button>
+                    <button id="btnClearRecords" class="btn-danger btn-small"
+                        style="width: auto; display: inline-block;">清空所有</button>
+                </div>
+                <div id="detectionList" class="detection-list">
+                    <div class="empty-state">暂无检测记录</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+
+</html>
