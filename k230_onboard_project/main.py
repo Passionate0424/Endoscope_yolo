@@ -452,6 +452,12 @@ def main():
                                 http_server.update_frame(frame)
                                 if frame_counter == 1 or frame_counter % 30 == 0:  # 第一帧和每30帧打印
                                     print(f"Frame updated: {frame_counter}, frame type: {type(frame)}")
+                                    if hasattr(frame, 'shape'):
+                                        print(f"  Frame shape: {frame.shape}, dtype: {getattr(frame, 'dtype', 'N/A')}")
+                                    elif hasattr(frame, 'size'):
+                                        print(f"  Frame size: {frame.size()}")
+                                    elif hasattr(frame, 'width') and hasattr(frame, 'height'):
+                                        print(f"  Frame dimensions: {frame.width()}x{frame.height()}")
                             
                             # 是否进行YOLO检测（降低检测频率）
                             results = None

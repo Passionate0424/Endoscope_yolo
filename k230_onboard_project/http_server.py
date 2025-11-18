@@ -363,6 +363,57 @@ class HTTPServer:
                                         if frame_count == 0:
                                             print(f"Direct HWC conversion failed: {e2}")
                                 
+                                # 打印ndarray的详细信息用于调试（在转换失败时，仅在前几次打印详细内容）
+                                if frame_jpeg is None:
+                                    arr = self.last_frame
+                                    # 只在第一次或前几次失败时打印详细信息，避免输出过多
+                                    print_debug_details = (frame_count == 0 and no_frame_count < 3)
+                                    if print_debug_details:
+                                        print(f"=== Image Conversion Debug Info (frame_count={frame_count}, no_frame_count={no_frame_count}) ===")
+                                    print(f"Frame type: {type(arr)}")
+                                    print(f"NDArray shape: {arr.shape if hasattr(arr, 'shape') else 'N/A'}")
+                                    print(f"NDArray dtype: {arr.dtype if hasattr(arr, 'dtype') else 'N/A'}")
+                                    print(f"NDArray size: {arr.size if hasattr(arr, 'size') else 'N/A'}")
+                                    if hasattr(arr, '__class__'):
+                                        print(f"NDArray class: {arr.__class__}")
+                                    if hasattr(arr, '__class__') and hasattr(arr.__class__, '__name__'):
+                                        print(f"NDArray class name: {arr.__class__.__name__}")
+                                    
+                                    # 打印对象的所有方法
+                                    print(f"Available methods on frame object:")
+                                    try:
+                                        methods = [m for m in dir(arr) if not m.startswith('_')]
+                                        for i, method in enumerate(methods[:20]):  # 只显示前20个方法
+                                            print(f"  {method}")
+                                        if len(methods) > 20:
+                                            print(f"  ... and {len(methods) - 20} more methods")
+                                    except Exception as e:
+                                        print(f"  Could not list methods: {e}")
+                                    
+                                    # 尝试找到image模块并检查其功能
+                                    try:
+                                        import image
+                                        print(f"image module found: {hasattr(image, 'Image')}")
+                                        if hasattr(image, 'Image'):
+                                            print(f"image.Image class: {image.Image}")
+                                            # 尝试创建一个测试Image对象以查看其方法
+                                            try:
+                                                test_img_methods = [m for m in dir(image.Image) if not m.startswith('_')]
+                                                print(f"image.Image available methods: {', '.join(test_img_methods[:10])}")
+                                            except:
+                                                pass
+                                    except Exception as e:
+                                        print(f"image module check failed: {e}")
+                                    
+                                    # 检查ulab.numpy模块
+                                    try:
+                                        import ulab.numpy as np
+                                        print(f"ulab.numpy available: {hasattr(np, 'transpose')}, {hasattr(np, 'uint8')}")
+                                    except Exception as e:
+                                        print(f"ulab.numpy check failed: {e}")
+                                    
+                                    print("=" * 60)
+                                
                                 # 如果成功获取JPEG数据，发送帧
                                 if frame_jpeg is not None and isinstance(frame_jpeg, bytes) and len(frame_jpeg) > 0:
                                     try:
@@ -385,7 +436,13 @@ class HTTPServer:
                                 else:
                                     no_frame_count += 1
                                     if frame_count == 0 and no_frame_count == 1:
-                                        print(f"MJPEG: Image conversion failed. Frame type: {type(self.last_frame)}")
+                                        print(f"MJPEG: Image conversion failed after all attempts.")
+                                        print(f"  Frame type: {type(self.last_frame)}")
+                                        print(f"  Frame value: {self.last_frame}")
+                                        print(f"  frame_jpeg value: {frame_jpeg}")
+                                        print(f"  frame_jpeg type: {type(frame_jpeg)}")
+                                        if frame_jpeg is not None:
+                                            print(f"  frame_jpeg length: {len(frame_jpeg)}")
                                         print(f"  Has to_jpeg: {hasattr(self.last_frame, 'to_jpeg')}")
                                         print(f"  Has compress: {hasattr(self.last_frame, 'compress')}")
                                         print(f"  Has save_to: {hasattr(self.last_frame, 'save_to')}")
