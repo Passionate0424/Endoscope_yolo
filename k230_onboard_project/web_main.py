@@ -29,8 +29,9 @@ class EndoscopeWebPlatform:
         # 将streamer附加到server，以便处理流式响应
         self.server.streamer = self.streamer
         
-        # 设置帧回调
+        # 设置帧回调与就绪检测
         self.yolo_controller.set_frame_callback(self.streamer.update_frame)
+        self.streamer.set_ready_checker(self.yolo_controller.is_ready)
         
         # 注册路由
         self.register_routes()

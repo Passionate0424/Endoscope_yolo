@@ -71,6 +71,8 @@ class HTTPServer:
                 error_code = e.args[0] if e.args else 0
                 
                 if error_code == 110:  # ETIMEDOUT - 超时
+                    import utime
+                    utime.sleep_ms(10)  # 短暂让出CPU
                     continue
                 elif error_code == 103:  # ECONNABORTED - 连接被客户端中止
                     continue
@@ -110,7 +112,7 @@ class HTTPServer:
         
         try:
             print(f"[连接#{conn_id}] 新连接: {addr}")
-            client_socket.settimeout(0.5)  # 减少到0.5秒,加快响应
+            client_socket.settimeout(2.0)  # 2秒超时
             
             # Keep-Alive 循环
             while request_count < max_requests:

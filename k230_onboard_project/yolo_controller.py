@@ -25,6 +25,7 @@ class YOLOController:
         self.detection_enabled = False
         self.thread = None
         self.stop_flag = False
+        self._initialization_done = False  # 初始化就绪标志
         
         # YOLO配置
         self.confidence_threshold = 0.5
@@ -43,6 +44,10 @@ class YOLOController:
     def set_frame_callback(self, callback):
         """设置帧更新回调（用于视频流）"""
         self.frame_callback = callback
+    
+    def is_ready(self):
+        """供其他组件查询YOLO线程是否完成初始化"""
+        return self._initialization_done
         
     def start_camera(self):
         """启动摄像头"""
@@ -52,11 +57,15 @@ class YOLOController:
             
         self.stop_flag = False
         self.camera_running = True
+        self._initialization_done = False  # 添加初始化完成标志
         
         # 在新线程中运行 - 使用K230的_thread模块
         _thread.start_new_thread(self._camera_loop, ())
         
-        print("摄像头已启动")
+        # ⭐ 关键修复：不要等待初始化！
+        # 在K230的非抢占式线程模型中，等待会阻塞HTTP响应
+        # 让YOLO线程自己初始化，HTTP立即返回
+        print("✅ 摄像头启动命令已发送，正在后台初始化...")
         return True
         
     def stop_camera(self):
@@ -117,9 +126,18 @@ class YOLOController:
             
             # 初始化摄像头 - 添加display_mode以显示到IDE
             print("[YOLO线程] 初始化摄像头...")
+            time.sleep(0.02)  # 让出CPU
+            
             try:
                 pl = PipeLine(rgb888p_size=[640, 360], display_mode="lcd")
+                time.sleep(0.05)  # PipeLine构造后让出CPU
+                
+                print("[YOLO线程] 调用 pl.create() ...")
+                create_start = time.time()
                 pl.create()
+                create_elapsed = time.time() - create_start
+                print(f"[YOLO线程] pl.create() 完成，耗时 {create_elapsed:.2f}s")
+                time.sleep(0.05)  # create()后让出CPU
             except Exception as e:
                 print(f"[YOLO线程] ❌ PipeLine初始化失败: {e}")
                 print("[YOLO线程] 可能原因: 1)摄像头未连接 2)摄像头被占用 3)显示设备问题")
@@ -127,12 +145,21 @@ class YOLOController:
                 sys.print_exception(e)
                 return
                 
-            display_size = pl.get_display_size()
+            print("[YOLO线程] 准备获取显示尺寸...")
+            try:
+                display_size = pl.get_display_size()
+            except Exception as e:
+                print(f"[YOLO线程] ❌ 获取显示尺寸失败: {e}")
+                import sys
+                sys.print_exception(e)
+                display_size = [640, 480]
             
             print(f"[YOLO线程] PipeLine已创建, 显示尺寸: {display_size}")
+            time.sleep(0.05)  # 让出CPU
             
             # 初始化YOLO模型
             print("[YOLO线程] 初始化YOLO模型...")
+            time.sleep(0.05)  # 让出CPU
             try:
                 yolo_detector = YOLOv5(
                     task_type='detect',
@@ -148,6 +175,7 @@ class YOLOController:
                 )
                 yolo_detector.config_preprocess()
                 print("[YOLO线程] ✅ YOLO模型已加载")
+                time.sleep(0.05)  # 模型加载后让出CPU
             except Exception as e:
                 print(f"[YOLO线程] ❌ YOLO模型加载失败: {e}")
                 print("[YOLO线程] 请检查: 1)/data/model.kmodel是否存在 2)模型文件是否损坏")
@@ -162,33 +190,98 @@ class YOLOController:
                 return
             
             print("[YOLO线程] 开始主循环")
+            time.sleep(0.05)  # 让出CPU
+            
+            # ⭐ 标记初始化完成
+            self._initialization_done = True
+            print("[YOLO线程] ✅ 初始化完成，通知主线程")
+            time.sleep(0.05)  # 让出CPU
             
             # FPS计算
             frame_count = 0
             debug_frame_count = 0  # 用于调试打印的独立计数器
             start_time = time.time()
             
-            print("[YOLO线程] 进入主循环")
-            
             # 添加循环计数器
             loop_iteration = 0
+            first_frame_sent = False  # 标记是否已发送第一帧
+            
+            print("[YOLO线程] 进入主循环，开始获取帧数据...")
+            time.sleep(0.01)  # 让出CPU，确保打印能输出
+            
+            # 🔧 分多次sleep，每次都让出CPU给其他线程
+            print("[YOLO线程] 等待硬件就绪（分段延时）...")
+            time.sleep(0.05)  # 50ms
+            
+            print("[YOLO线程] 延时 50ms...")
+            time.sleep(0.05)  # 再50ms
+            
+            print("[YOLO线程] 延时 100ms...")
+            time.sleep(0.1)   # 再100ms
+            
+            print("[YOLO线程] 延时 200ms...")
+            time.sleep(0.1)   # 再100ms (总共300ms)
+            
+            print("[YOLO线程] ✅ 硬件已就绪，开始主循环")
+            time.sleep(0.01)  # 让出CPU，确保打印能输出
             
             while not self.stop_flag:
                 loop_iteration += 1
                 
-                # 每100次循环打印一次
-                if loop_iteration % 100 == 0:
-                    print(f"[YOLO] 循环 #{loop_iteration}, FPS: {self.stats['fps']:.1f}")
+                # 前3次迭代每次都打印，之后每10次打印一次
+                if loop_iteration <= 3 or loop_iteration % 10 == 0:
+                    print(f"[YOLO线程] 循环迭代 #{loop_iteration}, 准备获取帧...")
                 
-                # 获取图像
-                frame = pl.get_frame()
+                # 🔧 在每次循环开始时，先让出CPU
+                time.sleep(0.01)  # 10ms让出CPU给其他线程
                 
-                # ⚠️ 关键：获取帧后立即让出CPU
-                # 调整为50ms以提高HTTP响应速度
-                time.sleep(0.05)  # 50ms - 约20fps (如果处理够快)
+                # 🔧 在第一次迭代时，打印线程信息
+                if loop_iteration == 1:
+                    try:
+                        import _thread
+                        print(f"[YOLO线程] 当前线程ID: {_thread.get_ident()}")
+                        time.sleep(0.01)  # 打印后让出CPU
+                    except:
+                        pass
                 
-                if frame is None:
-                    print("[YOLO线程] 警告: 获取帧失败")
+                # 🔧 使用看门狗变量检测阻塞
+                get_frame_start = time.time()
+                
+                # ⚠️ 关键诊断：在调用get_frame前后打印
+                if loop_iteration <= 3:
+                    print(f"[YOLO线程] 即将调用 pl.get_frame()... (迭代#{loop_iteration})")
+                    time.sleep(0.01)  # 打印后让出CPU
+                
+                # 获取图像 - 这是阻塞调用
+                # ⚠️ get_frame() 可能会阻塞，我们无法设置超时
+                # 但可以通过定期打印来确认它是否卡住
+                try:
+                    frame = pl.get_frame()
+                    
+                    # ⭐ 如果执行到这里，说明get_frame返回了
+                    if loop_iteration <= 3:
+                        print(f"[YOLO线程] pl.get_frame() 已返回 (迭代#{loop_iteration})")
+                        time.sleep(0.01)  # 打印后让出CPU
+                    get_frame_elapsed = time.time() - get_frame_start
+                    
+                    # 前3次打印获取帧耗时
+                    if loop_iteration <= 3:
+                        print(f"[YOLO线程] get_frame() 耗时: {get_frame_elapsed:.3f}s")
+                    
+                    # 打印获取帧的结果（前3次）
+                    if loop_iteration <= 3:
+                        if frame is not None:
+                            print(f"[YOLO线程] ✅ 成功获取帧 #{loop_iteration}")
+                        else:
+                            print(f"[YOLO线程] ❌ 获取帧失败 #{loop_iteration}")
+                    
+                    if frame is None:
+                        print("[YOLO线程] 警告: 获取帧失败")
+                        time.sleep(0.1)
+                        continue
+                        
+                except Exception as e:
+                    print(f"[YOLO线程] ❌ get_frame()异常: {e}")
                     time.sleep(0.1)
                     continue
                     
@@ -202,6 +295,7 @@ class YOLOController:
                     elapsed = time.time() - start_time
                     if elapsed > 0:
                         self.stats['fps'] = frame_count / elapsed
+                        print(f"[YOLO线程] FPS: {self.stats['fps']:.2f}")
                     frame_count = 0
                     start_time = time.time()
                     
@@ -231,7 +325,15 @@ class YOLOController:
                 # 更新视频流帧 - 始终发送osd_img
                 if self.frame_callback:
                     try:
-                        self.frame_callback(pl.osd_img)
+                        # 确保osd_img不为None才发送
+                        if pl.osd_img is not None:
+                            self.frame_callback(pl.osd_img)
+                            # 第一帧特别提示
+                            if not first_frame_sent:
+                                print("[YOLO线程] ✅ 已发送第一帧到视频流")
+                                first_frame_sent = True
+                        elif loop_iteration <= 5:  # 只在前5次迭代时打印警告
+                            print(f"[YOLO线程] 警告: osd_img为None (迭代#{loop_iteration})")
                     except Exception as e:
                         print(f"帧回调错误: {e}")
                 
@@ -239,14 +341,16 @@ class YOLOController:
                 try:
                     pl.show_image()
                 except Exception as e:
-                    if debug_frame_count % 100 == 0:
-                        print(f"[YOLO] 显示错误: {e}")
+                    pass  # 静默处理显示错误
                 
-                # 内存管理
+                # 内存管理 - 每100帧执行一次
                 if debug_frame_count % 100 == 0:
+                    print(f"[YOLO线程] 已处理 {debug_frame_count} 帧, 检测次数: {self.stats['total_detections']}")
                     gc.collect()
                 
-                # 循环末尾不需要额外sleep，主要让出在get_frame后
+                # ⚠️ 关键：MicroPython是非抢占式线程，必须主动让出CPU！
+                # 否则会阻塞HTTP服务器等其他线程
+                time.sleep(0.01)  # 10ms让出CPU - 理论最大100fps，实际受硬件限制约30fps
             
             print("[YOLO线程] 主循环正常结束")
                     

@@ -17,6 +17,7 @@ class MJPEGStreamer:
         self.current_frame = None
         self.last_frame_time = 0
         self.active_clients = 0
+        self.ready_check = None  # 可选：外部提供的就绪检查回调
         
     def update_frame(self, image):
         """更新当前帧（由YOLO线程调用）"""
@@ -25,6 +26,12 @@ class MJPEGStreamer:
         # 帧率限制
         if current_time - self.last_frame_time < self.frame_interval:
             return
+        
+        # 第一次收到帧时打印详细信息
+        if self.current_frame is None:
+            print(f"[Stream] ✅ 收到第一帧! 类型: {type(image)}")
+            if hasattr(image, 'width') and hasattr(image, 'height'):
+                print(f"[Stream] 图像尺寸: {image.width()}x{image.height()}")
         
         self.current_frame = image
         self.last_frame_time = current_time
@@ -35,6 +42,15 @@ class MJPEGStreamer:
         self._frame_count += 1
         if self._frame_count % 100 == 0:
             print(f"[Stream] 已更新 {self._frame_count} 帧")
+    
+    def set_ready_checker(self, checker):
+        """由外部注入的YOLO就绪检测函数"""
+        if callable(checker):
+            self.ready_check = checker
+            print("[Stream] ✅ 已绑定YOLO就绪检测回调")
+        else:
+            self.ready_check = None
+            print("[Stream] ⚠️ 提供的就绪检测函数不可调用，已忽略")
         
     def stream_handler(self, client_socket):
         """处理MJPEG流请求"""
@@ -53,6 +69,34 @@ class MJPEGStreamer:
             self.active_clients += 1
             print(f"[Stream] 视频流客户端已连接，当前活跃: {self.active_clients}")
             
+            # 优化：优先使用外部提供的就绪检查回调 (ready_check)
+            # 如果存在 callable ready_check(), 则等待该回调返回 True（带超时）。
+            # 否则回退到原来的短时分段等待（2s），以兼容旧逻辑。
+            if self.ready_check and callable(self.ready_check):
+                print("[Stream] 等待YOLO初始化完成（由ready_check控制，最长15s）...")
+                max_wait = 15.0
+                waited = 0.0
+                # 以 100ms 为步长检查 ready_check，期间让出CPU
+                while not self.ready_check() and waited < max_wait:
+                    time.sleep(0.1)
+                    waited += 0.1
+                    # 每0.5s打印一次进度
+                    if int(waited * 10) % 5 == 0:
+                        print(f"[Stream] 已等待 {waited:.1f}s...")
+
+                if self.ready_check():
+                    print("[Stream] ✅ YOLO已就绪，开始等待帧数据")
+                else:
+                    print("[Stream] ⚠️ YOLO在超时时间内未就绪，继续进入等待帧流程（可能会超时）")
+            else:
+                # 兼容旧逻辑：分段等待2秒
+                print("[Stream] ⏳ 未绑定ready_check，回退为固定2秒等待...")
+                for i in range(20):  # 20 * 100ms = 2秒
+                    time.sleep(0.1)  # 每100ms让出一次CPU
+                    if (i + 1) % 5 == 0:  # 每500ms打印一次
+                        print(f"[Stream] 已等待 {(i + 1) * 0.1:.1f}s...")
+                print("[Stream] ✅ 等待完成，开始等待帧数据")
+            
             last_sent_time = 0
             frame_sent_count = 0
             wait_count = 0
@@ -61,10 +105,17 @@ class MJPEGStreamer:
                 # 等待新帧
                 if self.current_frame is None:
                     wait_count += 1
-                    # 减少等待日志输出,从每20次改为每100次
-                    if wait_count % 100 == 0:
+                    # 每秒打印一次等待日志（20次 * 50ms = 1秒）
+                    if wait_count % 20 == 0:
                         print(f"[Stream] 等待帧数据... ({wait_count * 0.05:.1f}s)")
-                    time.sleep(0.05)  # 50ms等待
+                    
+                    # 超时检查 - 15秒后断开连接（给初始化更多时间）
+                    if wait_count > 300:  # 300 * 50ms = 15秒
+                        print("[Stream] ❌ 等待帧超时（15秒），断开连接")
+                        break
+                    
+                    # 🔧 增加sleep时间，减少CPU竞争
+                    time.sleep(0.05)  # 50ms等待 - 给YOLO线程更多CPU时间
                     continue
                     
                 current_time = time.time()
