@@ -1,0 +1,32 @@
+# for module compiling
+import os
+from building import *
+
+# Get current working directory
+cwd = GetCurrentDir()
+objs = []
+
+# Get the directory listing and filter out folders starting with 'app_'
+list = os.listdir(cwd)
+filtered_list = [d for d in list if not (d.startswith('app_') and os.path.isdir(os.path.join(cwd, d)))]
+
+# Get the value of USER_APP_DIR from the environment or default it
+user_app_dir_val = GetConfigValue('USER_APP_DIR')
+user_app_dir = user_app_dir_val if len(user_app_dir_val) else "app_canmv"
+user_app_dir = user_app_dir.strip('"')
+
+filtered_list.append(user_app_dir)
+
+# Also add app_http_server (HTTP server application)
+app_http_server_path = os.path.join(cwd, 'app_http_server')
+if os.path.isdir(app_http_server_path) and os.path.isfile(os.path.join(app_http_server_path, 'SConscript')):
+    filtered_list.append('app_http_server')
+
+# Iterate through the filtered list and include SConscript files
+for d in filtered_list:
+    path = os.path.join(cwd, d)
+    if os.path.isfile(os.path.join(path, 'SConscript')):
+        objs += SConscript(os.path.join(d, 'SConscript'))
+
+# Return the collected objects
+Return('objs')

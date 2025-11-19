@@ -1,0 +1,16 @@
+from building import *
+
+cwd     = GetCurrentDir()
+src     = Glob('src/*.c')
+CPPPATH = [cwd, cwd + '/include']
+
+CPPDEFINES = [ 
+    'HAVE_CCONFIG_H',
+    'FRAME_BUFFER_QUALITY=75',
+    'INET_ADDRSTRLEN=46'
+]
+
+group = DefineGroup('app_http_server', src, depend = [''], CPPPATH = CPPPATH,
+    CPPDEFINES = CPPDEFINES)
+
+Return('group')

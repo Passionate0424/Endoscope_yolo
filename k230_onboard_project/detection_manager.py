@@ -33,9 +33,9 @@ class DetectionManager:
             except:
                 # 目录不存在，创建它
                 os.mkdir(self.save_dir)
-                print(f"创建检测记录目录: {self.save_dir}")
+                print("创建检测记录目录: " + str(self.save_dir))
         except Exception as e:
-            print(f"创建目录失败: {e}")
+            print("创建目录失败: " + str(e))
             
     def _load_metadata(self):
         """加载元数据"""
@@ -43,22 +43,28 @@ class DetectionManager:
             # MicroPython检查文件是否存在
             try:
                 with open(self.metadata_file, 'r') as f:
-                    self.records = json.load(f)
-                print(f"已加载 {len(self.records)} 条检测记录")
-            except OSError:
-                # 文件不存在
+                    content = f.read()
+                    if content.strip():  # 文件不为空
+                        self.records = json.loads(content)
+                        print("已加载 %d 条检测记录" % len(self.records))
+                    else:
+                        self.records = []
+            except (OSError, ValueError) as e:
+                # 文件不存在或JSON解析失败
+                if isinstance(e, ValueError):
+                    print("JSON格式错误，重置记录")
                 self.records = []
         except Exception as e:
-            print(f"加载元数据失败: {e}")
+            print("加载元数据失败: " + str(e))
             self.records = []
             
     def _save_metadata(self):
         """保存元数据"""
         try:
             with open(self.metadata_file, 'w') as f:
-                json.dump(self.records, f)
+                f.write(json.dumps(self.records))
         except Exception as e:
-            print(f"保存元数据失败: {e}")
+            print("保存元数据失败: " + str(e))
             
     def save_detection(self, image, bbox, confidence):
         """
@@ -87,7 +93,7 @@ class DetectionManager:
                 # 标准PIL/OpenCV方式
                 image.save(filepath, quality=85)
             else:
-                print(f"图像对象不支持压缩或保存: {type(image)}")
+                print("图像对象不支持压缩或保存: " + str(type(image)))
                 return None
                 
             # 创建记录
@@ -114,12 +120,28 @@ class DetectionManager:
             # 保存元数据
             self._save_metadata()
             
-            print(f"检测记录已保存: {filename}, 置信度: {confidence:.2f}")
+            conf_str = "%.2f" % confidence
+            print("检测记录已保存: %s, 置信度: %s" % (filename, conf_str))
             return record['id']
             
         except Exception as e:
-            print(f"保存检测记录失败: {e}")
+            print("保存检测记录失败: " + str(e))
             return None
+    
+    def add_detection(self, image, bbox=None, confidence=0.0):
+        """
+        添加检测记录（与 save_detection 兼容的别名）
+        
+        参数:
+            image: 图像对象
+            bbox: 边界框 [x, y, w, h] (可选)
+            confidence: 置信度 (默认 0.0)
+        返回:
+            记录ID或None
+        """
+        if bbox is None:
+            bbox = [0, 0, 0, 0]
+        return self.save_detection(image, bbox, confidence)
             
     def get_records(self, limit=None, offset=0):
         """
@@ -153,7 +175,7 @@ class DetectionManager:
                 self.records.pop(i)
                 # 保存元数据
                 self._save_metadata()
-                print(f"检测记录已删除: {record_id}")
+                print("检测记录已删除: " + str(record_id))
                 return True
         return False
         
@@ -171,7 +193,7 @@ class DetectionManager:
             print("所有检测记录已删除")
             return True
         except Exception as e:
-            print(f"删除所有记录失败: {e}")
+            print("删除所有记录失败: " + str(e))
             return False
             
     def get_statistics(self):
@@ -207,7 +229,7 @@ class DetectionManager:
             except OSError:
                 pass  # 文件不存在
         except Exception as e:
-            print(f"删除文件失败 {filepath}: {e}")
+            print("删除文件失败 %s: %s" % (filepath, str(e)))
             
     def _get_file_size(self, filepath):
         """获取文件大小"""

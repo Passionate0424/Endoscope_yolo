@@ -45,6 +45,10 @@ class YOLOController:
         """设置帧更新回调（用于视频流）"""
         self.frame_callback = callback
     
+    def set_detection_callback(self, callback):
+        """设置检测结果回调"""
+        self.detection_callback = callback
+    
     def is_ready(self):
         """供其他组件查询YOLO线程是否完成初始化"""
         return self._initialization_done
