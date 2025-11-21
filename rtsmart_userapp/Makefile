@@ -24,7 +24,9 @@ LDFLAGS += -L$(RTT_ROOT)/rt-smart/userapps/sdk/rt-thread/lib
 # 源文件
 SRCS = src/http_server.c \
        src/http_handler.c \
-       src/frame_buffer.c
+       src/frame_buffer.c \
+       src/static_assets.c \
+       src/web_state.c
 
 OBJS = $(SRCS:.c=.o)
 

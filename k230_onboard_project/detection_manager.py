@@ -17,6 +17,7 @@ class DetectionManager:
         # MicroPython不支持os.path.join，手动拼接路径
         self.metadata_file = save_dir + '/detections.json'
         self.records = []
+        self.web_adapter = None
         
         # 创建保存目录
         self._ensure_directory()
@@ -122,6 +123,8 @@ class DetectionManager:
             
             conf_str = "%.2f" % confidence
             print("检测记录已保存: %s, 置信度: %s" % (filename, conf_str))
+            if self.web_adapter:
+                self.web_adapter.notify_record_saved(record)
             return record['id']
             
         except Exception as e:
@@ -176,6 +179,8 @@ class DetectionManager:
                 # 保存元数据
                 self._save_metadata()
                 print("检测记录已删除: " + str(record_id))
+                if self.web_adapter:
+                    self.web_adapter.notify_record_deleted(record_id)
                 return True
         return False
         
@@ -191,6 +196,8 @@ class DetectionManager:
             self._save_metadata()
             
             print("所有检测记录已删除")
+            if self.web_adapter:
+                self.web_adapter.notify_records_cleared()
             return True
         except Exception as e:
             print("删除所有记录失败: " + str(e))
@@ -249,3 +256,6 @@ class DetectionManager:
             )
         except:
             return str(int(timestamp))
+
+    def set_web_adapter(self, adapter):
+        self.web_adapter = adapter

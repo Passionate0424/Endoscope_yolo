@@ -4,7 +4,7 @@ C 层 HTTP 服务器 + Python YOLO 检测
 """
 
 import gc
-import utime as time
+import time
 from rtsmart_web_adapter import RTWebAdapter
 from detection_manager import DetectionManager
 from yolo_controller import YOLOController
@@ -76,6 +76,7 @@ def main():
     detection_manager = DetectionManager()
     
     # 设置回调
+    detection_manager.set_web_adapter(web_adapter)
     yolo_controller.set_frame_callback(web_adapter.update_frame)
     yolo_controller.set_detection_callback(detection_manager.add_detection)
     
@@ -99,17 +100,51 @@ def main():
     
     # 保持运行
     try:
+        last_print = time.time()
         while True:
-            time.sleep(10)
-            
-            # 定期打印统计
-            yolo_stats = yolo_controller.get_statistics()
-            detection_stats = detection_manager.get_statistics()
-            
-            fps = yolo_stats.get('fps', 0)
-            total_detections = detection_stats.get('total', 0)
-            print("[Stats] ⏱️ FPS: %.1f | 📊 检测数: %d" % (fps, total_detections))
-            
+            time.sleep(1)
+
+            control = web_adapter.pull_control()
+            if control:
+                desired_cam = control.get('camera_desired')
+                if desired_cam is not None:
+                    if desired_cam and not yolo_controller.camera_running:
+                        yolo_controller.start_camera()
+                    elif (not desired_cam) and yolo_controller.camera_running:
+                        yolo_controller.stop_camera()
+
+                desired_det = control.get('detection_desired')
+                if desired_det is not None:
+                    if desired_det and not yolo_controller.detection_enabled:
+                        yolo_controller.enable_detection()
+                    elif (not desired_det) and yolo_controller.detection_enabled:
+                        yolo_controller.disable_detection()
+
+                desired_conf = control.get('confidence_desired')
+                if desired_conf is not None:
+                    if abs(desired_conf - yolo_controller.confidence_threshold) > 1e-3:
+                        yolo_controller.set_confidence_threshold(desired_conf)
+
+            stats = yolo_controller.get_statistics()
+            det_stats = detection_manager.get_statistics()
+
+            web_adapter.update_runtime(
+                yolo_controller.camera_running,
+                yolo_controller.detection_enabled,
+                yolo_controller.confidence_threshold,
+            )
+            web_adapter.update_stats_remote(
+                stats.get('total_frames', 0),
+                stats.get('total_detections', 0),
+                stats.get('fps', 0.0),
+            )
+
+            if time.time() - last_print >= 10:
+                fps = stats.get('fps', 0.0)
+                total_detections = det_stats.get('total_count', 0)
+                print("[Stats] ⏱️ FPS: %.1f | 📊 检测数: %d" % (fps, total_detections))
+                last_print = time.time()
+
             gc.collect()
     
     except KeyboardInterrupt:

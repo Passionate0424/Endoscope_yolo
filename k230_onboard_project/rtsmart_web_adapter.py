@@ -74,6 +74,55 @@ class RTWebAdapter:
             return {}
         return rtsmart_web.get_stats()
 
+    def pull_control(self):
+        if not self.use_c_server:
+            return None
+        try:
+            return rtsmart_web.get_control()
+        except Exception as e:
+            print("[RTWeb] ⚠️ 获取控制信息失败:", e)
+            return None
+
+    def update_runtime(self, camera_running, detection_enabled, confidence):
+        if not self.use_c_server:
+            return
+        try:
+            rtsmart_web.set_runtime(camera_running, detection_enabled, confidence)
+        except Exception as e:
+            print("[RTWeb] ⚠️ 更新运行状态失败:", e)
+
+    def update_stats_remote(self, total_frames, total_detections, fps):
+        if not self.use_c_server:
+            return
+        try:
+            rtsmart_web.set_stats(total_frames, total_detections, fps)
+        except Exception as e:
+            print("[RTWeb] ⚠️ 更新统计失败:", e)
+
+    def notify_record_saved(self, record):
+        if not self.use_c_server:
+            return
+        try:
+            rtsmart_web.add_record(record['filename'], record['time_str'], record['confidence'])
+        except Exception as e:
+            print("[RTWeb] ⚠️ 同步检测记录失败:", e)
+
+    def notify_record_deleted(self, record_id):
+        if not self.use_c_server:
+            return
+        try:
+            rtsmart_web.delete_record(record_id)
+        except Exception as e:
+            print("[RTWeb] ⚠️ 删除检测记录失败:", e)
+
+    def notify_records_cleared(self):
+        if not self.use_c_server:
+            return
+        try:
+            rtsmart_web.clear_records()
+        except Exception as e:
+            print("[RTWeb] ⚠️ 清空检测记录失败:", e)
+
 
 # 兼容旧代码的别名
 MJPEGStreamerAdapter = RTWebAdapter

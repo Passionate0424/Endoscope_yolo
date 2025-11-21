@@ -11,36 +11,48 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
-#include <ifaddrs.h>
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <netinet/in.h>
+#include <wlan_mgnt.h>
+#include <errno.h>
 
 #include "frame_buffer.h"
 #include "http_handler.h"
-#include "config.h"
+#include "../include/config.h"
 
 #define SERVER_PORT 8080
 #define MAX_CLIENTS 5
-#define STACK_SIZE (8 * 1024)
+#define STACK_SIZE (16 * 1024)
+#define ACCEPT_THREAD_PRIORITY (RT_THREAD_PRIORITY_MAX - 4)
+#define CLIENT_THREAD_PRIORITY (RT_THREAD_PRIORITY_MAX - 3)
+
+#ifndef WIFI_CONNECT_TIMEOUT_MS
+#define WIFI_CONNECT_TIMEOUT_MS 10000
+#endif
+
+#ifndef WIFI_CONNECT_MAX_RETRY
+#define WIFI_CONNECT_MAX_RETRY 3
+#endif
 
 // 全局服务器状态
 static int server_fd = -1;
 static int server_running = 0;
-static pthread_t accept_thread;
+static rt_thread_t accept_thread = RT_NULL;
+static rt_uint16_t client_thread_index = 0;
+static rt_sem_t wifi_ready_sem = RT_NULL;
+static rt_bool_t wifi_handlers_registered = RT_FALSE;
 
 // 客户端连接处理
 typedef struct
 {
     int client_fd;
     struct sockaddr_in client_addr;
-    pthread_t thread;
 } client_ctx_t;
 
-static void *client_handler_thread(void *arg)
+static void client_handler_thread(void *parameter)
 {
-    client_ctx_t *ctx = (client_ctx_t *)arg;
+    client_ctx_t *ctx = (client_ctx_t *)parameter;
     char buffer[2048];
     int n;
 
@@ -48,7 +60,6 @@ static void *client_handler_thread(void *arg)
                inet_ntoa(ctx->client_addr.sin_addr),
                ntohs(ctx->client_addr.sin_port));
 
-    // 读取 HTTP 请求
     n = recv(ctx->client_fd, buffer, sizeof(buffer) - 1, 0);
     if (n <= 0)
     {
@@ -57,30 +68,63 @@ static void *client_handler_thread(void *arg)
     }
     buffer[n] = '\0';
 
-    // 解析请求
-    if (strncmp(buffer, "GET /stream", 11) == 0)
+    char method[8] = {0};
+    char url[256] = {0};
+
+    if (sscanf(buffer, "%7s %255s", method, url) != 2)
     {
-        // MJPEG 流请求
-        http_handle_mjpeg_stream(ctx->client_fd);
+        http_send_404(ctx->client_fd);
+        goto cleanup;
     }
-    else if (strncmp(buffer, "GET /snapshot", 13) == 0)
+
+    char *body = strstr(buffer, "\r\n\r\n");
+    if (body)
+        body += 4;
+    else
+        body = buffer + n;
+
+    char path[256];
+    rt_strncpy(path, url, sizeof(path));
+    char *query = NULL;
+    char *query_pos = strchr(path, '?');
+    if (query_pos)
     {
-        // 快照请求
-        http_handle_snapshot(ctx->client_fd);
+        *query_pos = '\0';
+        query = query_pos + 1;
     }
-    else if (strncmp(buffer, "GET /", 5) == 0)
+
+    if (strcmp(method, "GET") == 0)
     {
-        // 主页
-        http_handle_index(ctx->client_fd);
+        if (strcmp(path, "/stream") == 0)
+        {
+            http_handle_mjpeg_stream(ctx->client_fd);
+        }
+        else if (strcmp(path, "/snapshot") == 0)
+        {
+            http_handle_snapshot(ctx->client_fd);
+        }
+        else if (strncmp(path, "/api/", 5) == 0)
+        {
+            http_handle_api_request(ctx->client_fd, method, path, query, body);
+        }
+        else
+        {
+            http_handle_static_request(ctx->client_fd, path);
+        }
     }
-    else if (strncmp(buffer, "POST /api/", 10) == 0)
+    else if (strcmp(method, "POST") == 0 || strcmp(method, "DELETE") == 0)
     {
-        // API 请求
-        http_handle_api(ctx->client_fd, buffer, n);
+        if (strncmp(path, "/api/", 5) == 0)
+        {
+            http_handle_api_request(ctx->client_fd, method, path, query, body);
+        }
+        else
+        {
+            http_send_404(ctx->client_fd);
+        }
     }
     else
     {
-        // 404
         http_send_404(ctx->client_fd);
     }
 
@@ -88,12 +132,13 @@ cleanup:
     close(ctx->client_fd);
     rt_kprintf("[HTTP] Client disconnected\n");
     rt_free(ctx);
-    return NULL;
+    return;
 }
 
 // 接受连接线程
-static void *accept_thread_func(void *arg)
+static void accept_thread_func(void *parameter)
 {
+    (void)parameter;
     struct sockaddr_in client_addr;
     socklen_t addr_len;
     int client_fd;
@@ -127,23 +172,29 @@ static void *accept_thread_func(void *arg)
         ctx->client_fd = client_fd;
         ctx->client_addr = client_addr;
 
-        pthread_attr_t attr;
-        pthread_attr_init(&attr);
-        pthread_attr_setstacksize(&attr, STACK_SIZE);
-        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+        char thread_name[RT_NAME_MAX];
+        rt_snprintf(thread_name, sizeof(thread_name), "httpc%02d", client_thread_index++ % 100);
 
-        if (pthread_create(&ctx->thread, &attr, client_handler_thread, ctx) != 0)
+        rt_thread_t client_thread = rt_thread_create(thread_name,
+                                                     client_handler_thread,
+                                                     ctx,
+                                                     STACK_SIZE,
+                                                     CLIENT_THREAD_PRIORITY,
+                                                     10);
+        if (client_thread == RT_NULL)
         {
             rt_kprintf("[HTTP] Failed to create client thread\n");
             close(client_fd);
             rt_free(ctx);
+            continue;
         }
 
-        pthread_attr_destroy(&attr);
+        rt_thread_startup(client_thread);
     }
 
     rt_kprintf("[HTTP] Accept thread stopped\n");
-    return NULL;
+    accept_thread = RT_NULL;
+    return;
 }
 
 // 初始化 HTTP 服务器
@@ -159,16 +210,23 @@ int http_server_init(void)
         return -1;
     }
 
+    http_handler_init();
+
     // 创建 socket
     server_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server_fd < 0)
     {
-        rt_kprintf("[HTTP] Failed to create socket\n");
+        rt_kprintf("[HTTP] Failed to create socket, errno=%d\n", errno);
+        http_handler_deinit();
+        frame_buffer_deinit();
         return -1;
     }
 
     // 设置 socket 选项
-    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)
+    {
+        rt_kprintf("[HTTP] Warning: setsockopt SO_REUSEADDR failed, errno=%d\n", errno);
+    }
 
     // 绑定地址
     memset(&server_addr, 0, sizeof(server_addr));
@@ -178,16 +236,22 @@ int http_server_init(void)
 
     if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
     {
-        rt_kprintf("[HTTP] Failed to bind socket\n");
+        rt_kprintf("[HTTP] Failed to bind socket, errno=%d\n", errno);
         close(server_fd);
+        server_fd = -1;
+        http_handler_deinit();
+        frame_buffer_deinit();
         return -1;
     }
 
     // 监听
     if (listen(server_fd, MAX_CLIENTS) < 0)
     {
-        rt_kprintf("[HTTP] Failed to listen\n");
+        rt_kprintf("[HTTP] Failed to listen, errno=%d\n", errno);
         close(server_fd);
+        server_fd = -1;
+        http_handler_deinit();
+        frame_buffer_deinit();
         return -1;
     }
 
@@ -195,18 +259,24 @@ int http_server_init(void)
 
     // 创建接受连接线程
     server_running = 1;
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setstacksize(&attr, STACK_SIZE);
-
-    if (pthread_create(&accept_thread, &attr, accept_thread_func, NULL) != 0)
+    accept_thread = rt_thread_create("http_acc",
+                                     accept_thread_func,
+                                     RT_NULL,
+                                     STACK_SIZE,
+                                     ACCEPT_THREAD_PRIORITY,
+                                     20);
+    if (accept_thread == RT_NULL)
     {
         rt_kprintf("[HTTP] Failed to create accept thread\n");
         close(server_fd);
+        server_fd = -1;
+        server_running = 0;
+        http_handler_deinit();
+        frame_buffer_deinit();
         return -1;
     }
 
-    pthread_attr_destroy(&attr);
+    rt_thread_startup(accept_thread);
 
     rt_kprintf("[HTTP] Server started successfully\n");
     return 0;
@@ -226,9 +296,12 @@ void http_server_deinit(void)
             server_fd = -1;
         }
 
-        // 等待线程退出
-        pthread_join(accept_thread, NULL);
+        while (accept_thread != RT_NULL)
+        {
+            rt_thread_mdelay(50);
+        }
 
+        http_handler_deinit();
         // 清理帧缓冲
         frame_buffer_deinit();
 
@@ -269,61 +342,165 @@ MSH_CMD_EXPORT_ALIAS(cmd_http_server_status, http_status, Show HTTP server statu
 
 /* ====== WiFi 监控 + 自动启动 ====== */
 
-/**
- * 检查网络接口是否就绪
- * 通过检查是否存在有效的 IPv4 地址来判断网络是否初始化
- */
-static int is_network_ready(void)
+static void wifi_sta_connected_handler(int event, struct rt_wlan_buff *buff, void *parameter)
 {
-    struct ifaddrs *ifaddr, *ifa;
-    int family;
-    int has_valid_ip = 0;
+    (void)event;
+    (void)buff;
+    (void)parameter;
+    rt_kprintf("[WiFi] STA connected to AP\n");
+}
 
-    // 获取网络接口信息
-    if (getifaddrs(&ifaddr) == -1)
+static void wifi_sta_disconnect_handler(int event, struct rt_wlan_buff *buff, void *parameter)
+{
+    (void)event;
+    (void)buff;
+    (void)parameter;
+    rt_kprintf("[WiFi] STA disconnected, will retry...\n");
+}
+
+static void wifi_sta_got_ip_handler(int event, struct rt_wlan_buff *buff, void *parameter)
+{
+    (void)event;
+    (void)buff;
+    (void)parameter;
+
+    if (wifi_ready_sem)
     {
-        printf("[HTTP] getifaddrs() failed\n");
-        return 0;
+        rt_sem_release(wifi_ready_sem);
+    }
+}
+
+static void wifi_register_event_handlers(void)
+{
+    if (wifi_handlers_registered)
+    {
+        return;
     }
 
-    // 遍历所有网络接口
-    for (ifa = ifaddr; ifa != NULL; ifa = ifa->ifa_next)
+    rt_wlan_register_event_handler(RT_WLAN_EVT_STA_CONNECTED, wifi_sta_connected_handler, RT_NULL);
+    rt_wlan_register_event_handler(RT_WLAN_EVT_STA_DISCONNECTED, wifi_sta_disconnect_handler, RT_NULL);
+    rt_wlan_register_event_handler(RT_WLAN_EVT_READY, wifi_sta_got_ip_handler, RT_NULL);
+    wifi_handlers_registered = RT_TRUE;
+}
+
+static rt_err_t wifi_connect_if_needed(void)
+{
+    rt_err_t ret;
+
+    if (rt_wlan_is_ready())
     {
-        if (ifa->ifa_addr == NULL)
-            continue;
+        return RT_EOK;
+    }
 
-        family = ifa->ifa_addr->sa_family;
+    wifi_register_event_handlers();
 
-        // 只检查 IPv4 地址
-        if (family == AF_INET)
+    if (wifi_ready_sem == RT_NULL)
+    {
+        wifi_ready_sem = rt_sem_create("wifiip", 0, RT_IPC_FLAG_PRIO);
+        if (wifi_ready_sem == RT_NULL)
         {
-            struct sockaddr_in *sin = (struct sockaddr_in *)ifa->ifa_addr;
-
-            // 检查是否为回环地址 (127.0.0.1)
-            if (sin->sin_addr.s_addr == htonl(INADDR_LOOPBACK))
-                continue;
-
-            // 检查是否为有效地址 (非全零)
-            if (sin->sin_addr.s_addr != 0)
-            {
-                char ip_str[INET_ADDRSTRLEN];
-                inet_ntop(AF_INET, &sin->sin_addr, ip_str, INET_ADDRSTRLEN);
-                printf("[HTTP] Found valid IP on %s: %s\n", ifa->ifa_name, ip_str);
-                has_valid_ip = 1;
-                break;
-            }
+            rt_kprintf("[WiFi] Failed to create WiFi semaphore\n");
+            return -RT_ENOMEM;
+        }
+    }
+    else
+    {
+        while (rt_sem_take(wifi_ready_sem, RT_WAITING_NO) == RT_EOK)
+        {
         }
     }
 
-    freeifaddrs(ifaddr);
-
-    if (has_valid_ip)
+    ret = rt_wlan_set_mode(RT_WLAN_DEVICE_STA_NAME, RT_WLAN_STATION);
+    if (ret != RT_EOK)
     {
-        printf("[HTTP] Network is ready!\n");
-        return 1;
+        rt_kprintf("[WiFi] rt_wlan_set_mode failed (%d)\n", ret);
+        return ret;
     }
 
-    return 0;
+    rt_wlan_config_autoreconnect(RT_TRUE);
+
+    for (int attempt = 0; attempt < WIFI_CONNECT_MAX_RETRY; attempt++)
+    {
+        rt_kprintf("[WiFi] Connecting to %s (attempt %d/%d)\n",
+                   WIFI_DEFAULT_SSID, attempt + 1, WIFI_CONNECT_MAX_RETRY);
+
+        ret = rt_wlan_connect(WIFI_DEFAULT_SSID, WIFI_DEFAULT_PASSWORD);
+        if (ret != RT_EOK)
+        {
+            rt_kprintf("[WiFi] rt_wlan_connect failed (%d)\n", ret);
+            continue;
+        }
+
+        if (rt_sem_take(wifi_ready_sem, rt_tick_from_millisecond(WIFI_CONNECT_TIMEOUT_MS)) == RT_EOK)
+        {
+            rt_kprintf("[WiFi] STA got IP successfully\n");
+            return RT_EOK;
+        }
+
+        rt_kprintf("[WiFi] Wait IP timeout, disconnect and retry\n");
+        rt_wlan_disconnect();
+    }
+
+    return -RT_ETIMEOUT;
+}
+
+/**
+ * 检查 WiFi 是否连接
+ * 通过检查网络接口状态来判断
+ */
+static int is_wifi_connected(void)
+{
+    if (!rt_wlan_is_ready())
+    {
+        rt_kprintf("[HTTP] ⏳ WiFi not ready yet (link)\n");
+        return 0;
+    }
+
+    struct sockaddr_in addr;
+    int sock;
+    struct timeval tv;
+
+    sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (sock < 0)
+    {
+        rt_kprintf("[HTTP] [WiFi Check] socket failed\n");
+        return 0;
+    }
+
+    tv.tv_sec = 2;
+    tv.tv_usec = 0;
+    setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const void *)&tv, sizeof(tv));
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const void *)&tv, sizeof(tv));
+
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(53);
+    addr.sin_addr.s_addr = inet_addr("8.8.8.8");
+
+    char test_data[1] = {0};
+    int ret = sendto(sock, test_data, 1, 0, (struct sockaddr *)&addr, sizeof(addr));
+
+    close(sock);
+
+    if (ret >= 0)
+    {
+        rt_kprintf("[HTTP] ✅ WiFi connected (sendto success)\n");
+        return 1;
+    }
+    else
+    {
+        rt_kprintf("[HTTP] ⏳ WiFi not ready yet\n");
+        return 0;
+    }
+}
+
+/**
+ * 检查网络接口是否就绪
+ * 使用 WiFi 连接状态判断
+ */
+static int is_network_ready(void)
+{
+    return is_wifi_connected();
 }
 
 /**
@@ -338,12 +515,21 @@ static void http_server_autostart_thread(void *param)
     int consecutive_ok = 0;
     const int MAX_WAIT_ITERATIONS = 60; // 最多 120 * 500ms = 60 秒
     const int CONSECUTIVE_CHECKS = 3;   // 连续成功 3 次才启动
+    int wifi_retry_cooldown = 0;
+    rt_err_t wifi_ret;
 
     rt_kprintf("\n");
     rt_kprintf("╔════════════════════════════════════════════════════╗\n");
     rt_kprintf("║   🌐 大核: WiFi 网络感知自启动系统                 ║\n");
     rt_kprintf("╚════════════════════════════════════════════════════╝\n");
     rt_kprintf("[AutoStart] ⏳ 大核: 等待网络就绪中...\n");
+
+    wifi_ret = wifi_connect_if_needed();
+    if (wifi_ret != RT_EOK)
+    {
+        rt_kprintf("[WiFi] Initial WiFi connect failed (%d), will keep retrying...\n", wifi_ret);
+        wifi_retry_cooldown = 6;
+    }
 
     // 等待网络就绪
     while (check_count < MAX_WAIT_ITERATIONS)
@@ -371,6 +557,23 @@ static void http_server_autostart_thread(void *param)
             if (check_count % 6 == 0) // 每 3 秒输出一次
             {
                 rt_kprintf("[AutoStart] ⏳ 大核: 等待网络... (%d秒)\n", check_count / 2);
+            }
+
+            if (!rt_wlan_is_ready())
+            {
+                if (wifi_retry_cooldown <= 0)
+                {
+                    wifi_ret = wifi_connect_if_needed();
+                    if (wifi_ret != RT_EOK)
+                    {
+                        rt_kprintf("[WiFi] WiFi connect retry failed (%d)\n", wifi_ret);
+                    }
+                    wifi_retry_cooldown = 6;
+                }
+                else
+                {
+                    wifi_retry_cooldown--;
+                }
             }
         }
 

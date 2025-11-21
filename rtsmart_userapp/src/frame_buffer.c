@@ -11,6 +11,8 @@
 // 全局缓冲区实例
 static frame_buffer_t g_frame_buffer = {0};
 static struct rt_mutex g_buffer_mutex;
+static rt_int32_t g_push_count = 0;
+static rt_int32_t g_pop_fail_count = 0;
 
 int frame_buffer_init(int quality)
 {
@@ -83,6 +85,7 @@ int frame_buffer_push(const uint8_t *jpeg_data, size_t size)
 {
     if (!g_frame_buffer.initialized)
     {
+        rt_kprintf("[FrameBuffer] Push rejected: not initialized\n");
         rt_kprintf("[FrameBuffer] Not initialized\n");
         return -1;
     }
@@ -107,6 +110,15 @@ int frame_buffer_push(const uint8_t *jpeg_data, size_t size)
 
     rt_mutex_release(&g_buffer_mutex);
 
+    g_push_count++;
+    if (g_push_count <= 3 || (g_push_count % 100 == 0))
+    {
+        rt_kprintf("[FrameBuffer] Push #%d size=%d bytes (slot=%d)\n",
+                   g_push_count,
+                   (int)size,
+                   (g_frame_buffer.write_idx - 1 + MAX_FRAME_SLOTS) % MAX_FRAME_SLOTS);
+    }
+
     return 0;
 }
 
@@ -125,6 +137,11 @@ int frame_buffer_get_latest(uint8_t **out_data, size_t *out_size)
 
     if (!slot->valid || slot->size == 0)
     {
+        g_pop_fail_count++;
+        if (g_pop_fail_count <= 3 || (g_pop_fail_count % 50 == 0))
+        {
+            rt_kprintf("[FrameBuffer] Get failed: slot invalid (count=%d)\n", g_pop_fail_count);
+        }
         rt_mutex_release(&g_buffer_mutex);
         return -1; // 没有可用帧
     }
