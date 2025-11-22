@@ -1,12 +1,42 @@
 #include "web_state.h"
 
+#ifndef RTSMART_WEB_PORTABLE
 #include <rtthread.h>
-#include <stddef.h>
+#else
+#include "py/mphal.h"
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+typedef pthread_mutex_t rt_mutex_t;
+typedef int32_t rt_int32_t;
+#define RT_IPC_FLAG_PRIO 0
+#define RT_WAITING_FOREVER (-1)
+#define rt_kprintf printf
+#define rt_snprintf snprintf
+static inline void rt_mutex_init(rt_mutex_t *m, const char *name, int flag) {
+    (void)name; (void)flag;
+    pthread_mutex_init(m, NULL);
+}
+static inline void rt_mutex_detach(rt_mutex_t *m) {
+    pthread_mutex_destroy(m);
+}
+static inline int rt_mutex_take(rt_mutex_t *m, int timeout) {
+    (void)timeout;
+    return pthread_mutex_lock(m);
+}
+static inline void rt_mutex_release(rt_mutex_t *m) {
+    pthread_mutex_unlock(m);
+}
+#endif
 #include <string.h>
 
 typedef struct
 {
+#ifndef RTSMART_WEB_PORTABLE
     struct rt_mutex lock;
+#else
+    rt_mutex_t lock;
+#endif
     rt_bool_t camera_running;
     rt_bool_t detection_enabled;
     float confidence_threshold;

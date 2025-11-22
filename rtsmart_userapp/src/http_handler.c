@@ -17,6 +17,14 @@
 #include <stdlib.h>
 #include <ctype.h>
 
+// ⭐ 使用标准 libc 的 snprintf（支持浮点数），而不是 RT-Thread 的 rt_snprintf
+// 因为 RT_USING_LIBC 已启用，标准 snprintf 应该可用
+#ifdef RT_USING_LIBC
+// 使用标准 C 库的 snprintf（支持 %f）
+#else
+// 如果未启用 libc，使用手动格式化
+#endif
+
 #define MJPEG_BOUNDARY "frame"
 #define MAX_FPS 30
 #define DETECTION_DIR "/data/detections"
@@ -193,33 +201,129 @@ int http_handle_static_request(int client_fd, const char *path)
 
 static int http_send_status(int client_fd)
 {
-    char json[768];
+    // ⭐ 修复：增加缓冲区大小，避免 JSON 截断
+    char json[1024];
     web_stats_info_t stats;
     web_state_get_stats(&stats);
     web_control_info_t ctrl;
     web_state_get_control_info(&ctrl);
     uint16_t record_count = web_state_get_record_count();
 
-    snprintf(json, sizeof(json),
+    // ⭐ 修复：直接使用足够大的缓冲区，避免截断问题
+    // JSON 长度约 280 字节，使用 512 字节缓冲区足够，但为了安全使用 1024
+    char *json_buf = json;
+    size_t buf_size = sizeof(json);
+    
+    // ⭐ 关键修复：RT-Thread 内核的 rt_snprintf 不支持 %f 浮点数格式化
+    // 即使启用了 RT_USING_LIBC，内核代码中仍然使用 rt_snprintf
+    // 因此必须手动格式化浮点数为字符串
+    // 如果值为 NaN 或 Inf，使用默认值 0.0
+    float actual_conf = (ctrl.actual_confidence == ctrl.actual_confidence) ? ctrl.actual_confidence : 0.0f;
+    float desired_conf = (ctrl.desired_confidence == ctrl.desired_confidence) ? ctrl.desired_confidence : 0.0f;
+    float fps = (stats.fps == stats.fps) ? stats.fps : 0.0f; // NaN check: NaN != NaN is true
+    
+    // 手动格式化浮点数：转换为整数（保留2位小数）
+    int actual_conf_int = (int)(actual_conf * 100.0f + 0.5f); // 四舍五入
+    int desired_conf_int = (int)(desired_conf * 100.0f + 0.5f);
+    int fps_int = (int)(fps * 100.0f + 0.5f);
+    
+    // 处理负数情况
+    if (actual_conf_int < 0) actual_conf_int = 0;
+    if (desired_conf_int < 0) desired_conf_int = 0;
+    if (fps_int < 0) fps_int = 0;
+    
+    // 手动构建浮点数字符串 (例如: 0.50 -> "0.50")
+    char actual_conf_str[16], desired_conf_str[16], fps_str[16];
+    
+    // 初始化并格式化字符串
+    int actual_int = actual_conf_int / 100;
+    int actual_frac = actual_conf_int % 100;
+    if (actual_frac < 0) actual_frac = -actual_frac;
+    rt_snprintf(actual_conf_str, sizeof(actual_conf_str), "%d.%02d", actual_int, actual_frac);
+    
+    int desired_int = desired_conf_int / 100;
+    int desired_frac = desired_conf_int % 100;
+    if (desired_frac < 0) desired_frac = -desired_frac;
+    rt_snprintf(desired_conf_str, sizeof(desired_conf_str), "%d.%02d", desired_int, desired_frac);
+    
+    int fps_int_part = fps_int / 100;
+    int fps_frac = fps_int % 100;
+    if (fps_frac < 0) fps_frac = -fps_frac;
+    rt_snprintf(fps_str, sizeof(fps_str), "%d.%02d", fps_int_part, fps_frac);
+    
+    // ⭐ 使用手动格式化的字符串，避免使用 %f
+    int len = rt_snprintf(json, sizeof(json),
              "{\"success\":true,\"data\":{"
              "\"camera\":{\"running\":%s,\"desired\":%s},"
              "\"detection\":{\"enabled\":%s,\"desired\":%s},"
-             "\"confidence\":{\"actual\":%.2f,\"desired\":%.2f},"
+             "\"confidence\":{\"actual\":%s,\"desired\":%s},"
              "\"command_version\":%u,"
-             "\"yolo_stats\":{\"fps\":%.2f,\"total_frames\":%u,\"total_detections\":%u},"
+             "\"yolo_stats\":{\"fps\":%s,\"total_frames\":%u,\"total_detections\":%u},"
              "\"detection_stats\":{\"total_count\":%u}}}",
              ctrl.actual_camera_running ? "true" : "false",
              ctrl.desired_camera_running ? "true" : "false",
              ctrl.actual_detection_enabled ? "true" : "false",
              ctrl.desired_detection_enabled ? "true" : "false",
-             ctrl.actual_confidence,
-             ctrl.desired_confidence,
+             actual_conf_str,
+             desired_conf_str,
              ctrl.command_version,
-             stats.fps,
+             fps_str,
              stats.total_frames,
              stats.total_detections,
              record_count);
-    return http_send_json(client_fd, json);
+    
+    // 检查格式化是否成功
+    if (len < 0)
+    {
+        return http_send_json(client_fd, "{\"success\":false,\"message\":\"Format error\"}");
+    }
+    
+    // ⭐ 修复：检查缓冲区是否足够，如果截断或刚好填满则使用更大的缓冲区
+    // snprintf 返回应该写入的字节数（不包括 \0），如果 >= buf_size-1 说明被截断
+    if (len >= (int)buf_size - 1)
+    {
+        // 缓冲区不足，使用动态分配
+        buf_size = 2048;
+        json_buf = (char *)rt_malloc(buf_size);
+        if (!json_buf)
+        {
+            return http_send_json(client_fd, "{\"success\":false,\"message\":\"Memory error\"}");
+        }
+        
+        len = rt_snprintf(json_buf, buf_size,
+                 "{\"success\":true,\"data\":{"
+                 "\"camera\":{\"running\":%s,\"desired\":%s},"
+                 "\"detection\":{\"enabled\":%s,\"desired\":%s},"
+                 "\"confidence\":{\"actual\":%s,\"desired\":%s},"
+                 "\"command_version\":%u,"
+                 "\"yolo_stats\":{\"fps\":%s,\"total_frames\":%u,\"total_detections\":%u},"
+                 "\"detection_stats\":{\"total_count\":%u}}}",
+                 ctrl.actual_camera_running ? "true" : "false",
+                 ctrl.desired_camera_running ? "true" : "false",
+                 ctrl.actual_detection_enabled ? "true" : "false",
+                 ctrl.desired_detection_enabled ? "true" : "false",
+                 actual_conf_str,
+                 desired_conf_str,
+                 ctrl.command_version,
+                 fps_str,
+                 stats.total_frames,
+                 stats.total_detections,
+                 record_count);
+        
+        // 如果仍然截断或失败，返回错误
+        if (len < 0 || len >= (int)buf_size - 1)
+        {
+            rt_free(json_buf);
+            return http_send_json(client_fd, "{\"success\":false,\"message\":\"JSON format error\"}");
+        }
+    }
+    
+    int ret = http_send_json(client_fd, json_buf);
+    if (json_buf != json)
+    {
+        rt_free(json_buf);
+    }
+    return ret;
 }
 
 static int http_send_records(int client_fd, const char *query)
@@ -336,6 +440,10 @@ int http_handle_mjpeg_stream(int client_fd)
     int frame_count = 0;
     int frame_interval_ms = 1000 / MAX_FPS;
     rt_uint32_t last_send_ms = 0;
+    rt_uint32_t stream_start_ms = http_get_tick_ms();
+    rt_uint32_t last_frame_time_ms = 0;
+    int no_frame_count = 0;
+    const int MAX_NO_FRAME_COUNT = 300; // 3秒无帧超时 (300 * 10ms)
 
     const char *stream_header =
         "HTTP/1.1 200 OK\r\n"
@@ -355,17 +463,54 @@ int http_handle_mjpeg_stream(int client_fd)
     while (1)
     {
         rt_uint32_t now = http_get_tick_ms();
+        
+        // 检查是否太久没有收到帧（超时保护）
+        if (frame_count == 0)
+        {
+            // 首次连接，等待最多5秒
+            if (now - stream_start_ms > 5000)
+            {
+                rt_kprintf("[MJPEG] Timeout: No frames received in 5s, closing stream\n");
+                break;
+            }
+        }
+        else
+        {
+            // 已有帧后，如果超过3秒没有新帧，关闭流
+            if (last_frame_time_ms > 0 && (now - last_frame_time_ms) > 3000)
+            {
+                rt_kprintf("[MJPEG] Timeout: No new frames for 3s, closing stream\n");
+                break;
+            }
+        }
+        
+        // 控制发送频率
         if (now - last_send_ms < (rt_uint32_t)frame_interval_ms)
         {
             rt_thread_mdelay(5);
             continue;
         }
 
+        // 尝试获取最新帧
         if (frame_buffer_get_latest(&jpeg_data, &jpeg_size) != 0)
         {
+            no_frame_count++;
+            if (no_frame_count == 1)
+            {
+                rt_kprintf("[MJPEG] Waiting for frames...\n");
+            }
+            else if (no_frame_count % 100 == 0)
+            {
+                rt_kprintf("[MJPEG] Still waiting for frames (count=%d)\n", no_frame_count);
+            }
+            
             rt_thread_mdelay(10);
             continue;
         }
+
+        // 成功获取到帧
+        no_frame_count = 0;
+        last_frame_time_ms = now;
 
         int len = snprintf(boundary_header, sizeof(boundary_header),
                            "\r\n--" MJPEG_BOUNDARY "\r\n"
@@ -389,7 +534,11 @@ int http_handle_mjpeg_stream(int client_fd)
         frame_count++;
         last_send_ms = now;
 
-        if (frame_count % 100 == 0)
+        if (frame_count == 1)
+        {
+            rt_kprintf("[MJPEG] First frame sent, size=%zu bytes\n", jpeg_size);
+        }
+        else if (frame_count % 100 == 0)
         {
             rt_kprintf("[MJPEG] Sent %d frames\n", frame_count);
         }

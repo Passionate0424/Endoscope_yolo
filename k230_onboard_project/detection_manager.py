@@ -142,6 +142,11 @@ class DetectionManager:
         返回:
             记录ID或None
         """
+        # ⭐ 优化：只在置信度足够高时保存图像，避免保存误检（提高性能）
+        # 置信度阈值：0.3（可以根据需要调整）
+        if confidence < 0.3:
+            return None  # 不保存低置信度的检测结果
+        
         if bbox is None:
             bbox = [0, 0, 0, 0]
         return self.save_detection(image, bbox, confidence)

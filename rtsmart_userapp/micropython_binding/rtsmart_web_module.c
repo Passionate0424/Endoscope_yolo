@@ -8,7 +8,9 @@
 #include "py/objstr.h"
 #include "py/mperrno.h"
 
+#ifndef RTSMART_WEB_PORTABLE
 #include <rtthread.h>
+#endif
 
 #include "frame_buffer.h"
 #include "web_state.h"

@@ -5,12 +5,50 @@
  */
 
 #include "frame_buffer.h"
+
+#ifndef RTSMART_WEB_PORTABLE
 #include <rtthread.h>
+#else
+#include "py/mphal.h"
+#include <pthread.h>
+#include <stdio.h>
+#include <stdlib.h>
+typedef pthread_mutex_t rt_mutex_t;
+typedef int32_t rt_int32_t;
+typedef uint32_t rt_tick_t;
+#define RT_IPC_FLAG_PRIO 0
+#define RT_WAITING_FOREVER (-1)
+#define RT_TICK_PER_SECOND 1000
+#define rt_kprintf printf
+#define rt_malloc malloc
+#define rt_free free
+static inline void rt_mutex_init(rt_mutex_t *m, const char *name, int flag) {
+    (void)name; (void)flag;
+    pthread_mutex_init(m, NULL);
+}
+static inline void rt_mutex_detach(rt_mutex_t *m) {
+    pthread_mutex_destroy(m);
+}
+static inline int rt_mutex_take(rt_mutex_t *m, int timeout) {
+    (void)timeout;
+    return pthread_mutex_lock(m);
+}
+static inline void rt_mutex_release(rt_mutex_t *m) {
+    pthread_mutex_unlock(m);
+}
+static inline rt_tick_t rt_tick_get(void) {
+    return (rt_tick_t)(mp_hal_ticks_ms());
+}
+#endif
 #include <string.h>
 
 // 全局缓冲区实例
 static frame_buffer_t g_frame_buffer = {0};
+#ifndef RTSMART_WEB_PORTABLE
 static struct rt_mutex g_buffer_mutex;
+#else
+static rt_mutex_t g_buffer_mutex;
+#endif
 static rt_int32_t g_push_count = 0;
 static rt_int32_t g_pop_fail_count = 0;
 
@@ -102,7 +140,7 @@ int frame_buffer_push(const uint8_t *jpeg_data, size_t size)
     frame_slot_t *slot = &g_frame_buffer.slots[g_frame_buffer.write_idx];
     memcpy(slot->data, jpeg_data, size);
     slot->size = size;
-    slot->timestamp_ms = rt_tick_get_millisecond();
+    slot->timestamp_ms = (rt_tick_get() * 1000U) / RT_TICK_PER_SECOND;
     slot->valid = 1;
 
     // 更新写索引（环形）

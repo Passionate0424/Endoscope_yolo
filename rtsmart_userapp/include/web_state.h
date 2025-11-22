@@ -1,7 +1,19 @@
 #ifndef WEB_STATE_H
 #define WEB_STATE_H
 
+#ifdef RTSMART_WEB_PORTABLE
+#include <stdbool.h>
+typedef bool rt_bool_t;
+#ifndef RT_TRUE
+#define RT_TRUE true
+#endif
+#ifndef RT_FALSE
+#define RT_FALSE false
+#endif
+#else
 #include <rtthread.h>
+#endif
+
 #include <stdint.h>
 
 #define WEB_STATE_MAX_RECORDS 50

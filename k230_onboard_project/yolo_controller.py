@@ -201,10 +201,25 @@ class YOLOController:
             print("[YOLO线程] ✅ 初始化完成，通知主线程")
             time.sleep(0.05)  # 让出CPU
             
+            # ⭐ 关键修复：初始化完成后，通知主线程同步状态到C层
+            # 这样页面刷新后能读取到正确的状态
+            try:
+                # 尝试获取frame_callback，如果它设置了web_adapter，则通知更新
+                if self.frame_callback:
+                    # frame_callback是web_adapter.update_frame，我们需要通知主线程
+                    # 但这里无法直接访问主线程的web_adapter
+                    # 所以我们在主线程中会定期检查并同步状态
+                    pass
+            except:
+                pass
+            
             # FPS计算
-            frame_count = 0
+            frame_count = 0  # 用于打印的计数器（会重置）
+            fps_calc_count = 0  # 用于FPS计算的计数器（定期重置）
             debug_frame_count = 0  # 用于调试打印的独立计数器
             start_time = time.time()
+            fps_start_time = time.time()  # FPS计算的起始时间
+            fps_reset_interval = 5.0  # 每5秒重置一次FPS计算，保持准确性
             
             # 添加循环计数器
             loop_iteration = 0
@@ -291,17 +306,28 @@ class YOLOController:
                     
                 # 更新统计
                 frame_count += 1
+                fps_calc_count += 1  # FPS计算计数器
                 debug_frame_count += 1
                 self.stats['total_frames'] += 1
 
-                # 计算FPS
+                # ⭐ 优化FPS计算：使用滑动窗口（每5秒重置一次，保持准确性）
+                current_time = time.time()
+                elapsed = current_time - fps_start_time
+                
+                if elapsed > 0.1:  # 至少 100ms 才计算，避免除零
+                    self.stats['fps'] = fps_calc_count / elapsed
+                else:
+                    self.stats['fps'] = 0.0
+                
+                # 每5秒重置FPS计算，保持准确性（避免初始化时间影响）
+                if elapsed >= fps_reset_interval:
+                    fps_calc_count = 0
+                    fps_start_time = current_time
+                
+                # 每30帧打印一次
                 if frame_count >= 30:
-                    elapsed = time.time() - start_time
-                    if elapsed > 0:
-                        self.stats['fps'] = frame_count / elapsed
-                        print(f"[YOLO线程] FPS: {self.stats['fps']:.2f}")
-                    frame_count = 0
-                    start_time = time.time()
+                    print("[YOLO线程] FPS: %.2f (总帧数: %d)" % (self.stats['fps'], self.stats['total_frames']))
+                    frame_count = 0  # 只重置打印计数器
                     
                 # YOLO检测
                 results = None
@@ -321,25 +347,43 @@ class YOLOController:
                             # 调用检测回调（保存图像等）
                             if self.detection_callback:
                                 try:
+                                    # 尝试从检测结果中提取置信度
+                                    # YOLO 检测结果通常是 [x, y, w, h, confidence, class_id] 或类似结构
+                                    confidence = 0.0
+                                    if isinstance(det, (list, tuple)) and len(det) >= 5:
+                                        confidence = float(det[4])  # 第5个元素通常是置信度
+                                    elif hasattr(det, 'confidence'):
+                                        confidence = float(det.confidence)
+                                    elif hasattr(det, 'conf'):
+                                        confidence = float(det.conf)
+                                    
                                     # 使用 pl.osd_img（Image对象）而不是 frame（ndarray）
-                                    self.detection_callback(pl.osd_img, det, 0.0)
+                                    self.detection_callback(pl.osd_img, det, confidence)
                                 except Exception as e:
-                                    print(f"检测回调错误: {e}")
+                                    print("[YOLO线程] 检测回调错误: " + str(e))
                 
                 # 更新视频流帧 - 始终发送osd_img
                 if self.frame_callback:
                     try:
                         # 确保osd_img不为None才发送
                         if pl.osd_img is not None:
+                            if loop_iteration <= 5:
+                                print("[YOLO线程] [迭代#%d] 调用 frame_callback..." % loop_iteration)
                             self.frame_callback(pl.osd_img)
                             # 第一帧特别提示
                             if not first_frame_sent:
                                 print("[YOLO线程] ✅ 已发送第一帧到视频流")
                                 first_frame_sent = True
-                        elif loop_iteration <= 5:  # 只在前5次迭代时打印警告
-                            print(f"[YOLO线程] 警告: osd_img为None (迭代#{loop_iteration})")
+                        elif loop_iteration <= 10:  # 前10次迭代时打印警告
+                            print("[YOLO线程] [迭代#%d] 警告: osd_img为None" % loop_iteration)
                     except Exception as e:
-                        print(f"帧回调错误: {e}")
+                        print("[YOLO线程] [迭代#%d] 帧回调错误: %s" % (loop_iteration, str(e)))
+                        import sys
+                        sys.print_exception(e)
+                else:
+                    # 调试：检查 frame_callback 是否被设置
+                    if loop_iteration <= 10:
+                        print("[YOLO线程] [迭代#%d] ⚠️ 警告: frame_callback 未设置！" % loop_iteration)
                 
                 # 显示到屏幕
                 try:
