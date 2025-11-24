@@ -21,11 +21,17 @@ except ImportError:
 class RTWebAdapter:
     """
     适配器：将 Python YOLO 检测结果推送到 C 层 HTTP 服务器
+
+    使用说明:
+    - 适配器仅接受 `image.Image` 对象或已经压缩的 JPEG bytes。
+    - 请尽量把 `pl.cur_frame`（image.Image）传入 `update_frame()`，或在用户代码里先调用 `image.compress()` 再传入 bytes。
+    - 不要把 ulab/ndarray (3,H,W) 直接传给 adapter（此代码不再做隐式 ndarray->Image 转换）。
     """
     
     def __init__(self, quality=75, http_api_host="127.0.0.1", http_api_port=8080):
         self.quality = quality
         self.use_c_server = HAS_C_SERVER
+        # No ndarray conversion; adapter expects image.Image or JPEG bytes
         self._frame_count = 0
         self._push_success_count = 0
         self._push_fail_count = 0
@@ -81,8 +87,55 @@ class RTWebAdapter:
             return
 
         try:
-            # 将图像压缩为 JPEG，再写入 C 端帧缓冲
-            jpeg_bytes = image.compress(quality=self.quality)
+            # Debug logging: incoming type and shape (if available)
+            try:
+                incoming_type = type(image)
+                incoming_shape = getattr(image, 'shape', None)
+            except Exception:
+                incoming_type = type(image)
+                incoming_shape = None
+            print("[RTWeb] Incoming frame type:", incoming_type, "shape=", incoming_shape)
+
+            # If the caller passed already-compressed JPEG bytes, push directly
+            if isinstance(image, (bytes, bytearray)):
+                import rtsmart_web
+                # Debug: print JPEG magic and size
+                try:
+                    if len(image) >= 4:
+                        head = image[:4]
+                        tail = image[-2:]
+                        if not (head[0] == 0xFF and head[1] == 0xD8):
+                            print("[RTWeb] ⚠️ Incoming JPEG head magic mismatch:", head)
+                        if not (tail[0] == 0xFF and tail[1] == 0xD9):
+                            print("[RTWeb] ⚠️ Incoming JPEG tail magic mismatch:", tail)
+                        print("[RTWeb] Incoming JPEG bytes head=", head, "tail=", tail, "len=", len(image))
+                except Exception:
+                    pass
+
+                rtsmart_web.push_frame(image)
+                self._frame_count += 1
+                if self._frame_count <= 20:
+                    print(f"[RTWeb] 推送第 {self._frame_count} 帧（bytes），大小 {len(image)} 字节")
+                return
+            # If image is an image.Image (official API), compress and push
+            if hasattr(image, 'compress'):
+                jpeg_bytes = image.compress(quality=self.quality)
+            else:
+                # Unsupported type: do not attempt complex ndarray conversions here
+                print("[RTWeb] ⚠️ Unsupported frame type: %s. Pass `image.Image` or JPEG bytes (image.compress())." % type(image))
+                return
+            # Debug: print JPEG head/tail for early frames
+            try:
+                if len(jpeg_bytes) >= 4:
+                    head = jpeg_bytes[:4]
+                    tail = jpeg_bytes[-2:]
+                    if not (head[0] == 0xFF and head[1] == 0xD8):
+                        print("[RTWeb] ⚠️ Compressed JPEG head magic mismatch:", head)
+                    if not (tail[0] == 0xFF and tail[1] == 0xD9):
+                        print("[RTWeb] ⚠️ Compressed JPEG tail magic mismatch:", tail)
+                    print("[RTWeb] Compressed JPEG head=", head, "tail=", tail, "len=", len(jpeg_bytes))
+            except Exception:
+                pass
             import rtsmart_web
 
             rtsmart_web.push_frame(jpeg_bytes)
@@ -95,72 +148,19 @@ class RTWebAdapter:
             if self._push_fail_count <= 10 or self._push_fail_count % 50 == 0:
                 print("[RTWeb] ⚠️ 推帧失败:", e)
 
-
-    def is_ready(self):
-        """检查 C 服务器是否就绪"""
-        if not self.use_c_server:
-            return False
-        return rtsmart_web.is_ready()
-    
-    def get_stats(self):
-        """获取服务器统计信息"""
-        if not self.use_c_server:
-            return {}
-        return rtsmart_web.get_stats()
-
-    def pull_control(self):
-        if not self.use_c_server:
+    def _ensure_image_obj(self, src):
+        """
+        简化版本：仅接受 `image.Image` 对象。
+        - 如果传入的是 `image.Image`（带 compress 方法），直接返回
+        - 对于其他类型（ndarray 等），打印提示并返回 None。
+        """
+        if src is None:
             return None
-        
-        # ⭐ 关键说明：
-        # RT-Smart 中，内核层的 web_state 和用户层的 web_state 是两份独立的数据结构
-        # 内核层的 web_state（HTTP 服务器使用）和用户层的 web_state（MicroPython 绑定使用）
-        # 它们不共享内存，所以需要通过 IPC 机制同步
-        #
-        # 方案1：通过 HTTP API 读取（当前实现）- 简单可靠，与前端同步
-        # 方案2：实现共享内存/设备节点（需要修改内核，复杂度高）
-        #
-        # 当前使用方案1：通过 HTTP API 读取内核层的 web_state
-        if self._use_http_api_for_control:
-            try:
-                # 通过 HTTP API 读取状态（从内核层的 web_state）
-                status_data = self._http_get_status()
-                if status_data and status_data.get('success') and status_data.get('data'):
-                    data = status_data['data']
-                    # 转换为与 rtsmart_web.get_control() 相同的格式
-                    control = {
-                        'camera_desired': data.get('camera', {}).get('desired', False),
-                        'camera_running': data.get('camera', {}).get('running', False),
-                        'detection_desired': data.get('detection', {}).get('desired', False),
-                        'detection_enabled': data.get('detection', {}).get('enabled', False),
-                        'confidence_desired': data.get('confidence', {}).get('desired', 0.5),
-                        'confidence_actual': data.get('confidence', {}).get('actual', 0.5),
-                        'command_version': data.get('command_version', 0),
-                    }
-                    return control
-                return None
-            except Exception as e:
-                # HTTP API 失败，回退到 C 绑定（虽然可能读取不到正确的版本号，因为读取的是用户层的 web_state）
-                # 这里只记录错误，不打印详细信息（避免刷屏）
-                try:
-                    return rtsmart_web.get_control()
-                except:
-                    return None
-        else:
-            # 使用 C 绑定（不推荐，因为读取的是用户层的 web_state，与内核层的 web_state 不同步）
-            # 用户层的 web_state.command_version 始终是初始值，不会反映内核层的变化
-            try:
-                control = rtsmart_web.get_control()
-                if control is None:
-                    print("[RTWeb] ⚠️ get_control() 返回 None")
-                elif 'command_version' not in control:
-                    print("[RTWeb] ⚠️ 控制信息中缺少 command_version 字段: %s" % str(control))
-                return control
-            except Exception as e:
-                print("[RTWeb] ⚠️ 获取控制信息失败:", e)
-                import sys
-                sys.print_exception(e)
-                return None
+        if hasattr(src, "compress"):
+            return src
+        print("[RTWeb] ⚠️ Unsupported frame type: %s. Pass an `image.Image` or JPEG bytes (image.compress())." % type(src))
+        return None
+            
     
     def _http_get_status(self):
         """通过 HTTP API 获取状态"""
@@ -278,6 +278,47 @@ class RTWebAdapter:
             print("[RTWeb] ⚠️ 更新统计失败:", e)
             import sys
             sys.print_exception(e)
+
+    def pull_control(self):
+        """从 HTTP API 或 C 绑定读取前端控制信息并返回一个标准化的 control dict。"""
+        if not self.use_c_server:
+            return None
+
+        if self._use_http_api_for_control:
+            try:
+                status_data = self._http_get_status()
+                if status_data and status_data.get('success') and status_data.get('data'):
+                    data = status_data['data']
+                    control = {
+                        'camera_desired': data.get('camera', {}).get('desired', False),
+                        'camera_running': data.get('camera', {}).get('running', False),
+                        'detection_desired': data.get('detection', {}).get('desired', False),
+                        'detection_enabled': data.get('detection', {}).get('enabled', False),
+                        'confidence_desired': data.get('confidence', {}).get('desired', 0.5),
+                        'confidence_actual': data.get('confidence', {}).get('actual', 0.5),
+                        'command_version': data.get('command_version', 0),
+                    }
+                    return control
+                return None
+            except Exception:
+                # 回退到 C 绑定
+                try:
+                    return rtsmart_web.get_control()
+                except:
+                    return None
+        else:
+            try:
+                control = rtsmart_web.get_control()
+                if control is None:
+                    print("[RTWeb] ⚠️ get_control() 返回 None")
+                elif 'command_version' not in control:
+                    print("[RTWeb] ⚠️ 控制信息中缺少 command_version 字段: %s" % str(control))
+                return control
+            except Exception as e:
+                print("[RTWeb] ⚠️ 获取控制信息失败:", e)
+                import sys
+                sys.print_exception(e)
+                return None
 
     def notify_record_saved(self, record):
         if not self.use_c_server:

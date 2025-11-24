@@ -87,7 +87,8 @@ def main():
 
             if stream_enabled:
                 try:
-                    web.update_frame(pl.osd_img)
+                    # Use the original image.Image (pl.cur_frame) to avoid ndarray conversions
+                    web.update_frame(pl.cur_frame)
                 except Exception as err:
                     print("[HTTP] 推帧失败：", err)
 

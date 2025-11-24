@@ -339,6 +339,12 @@ class YOLOController:
                     if results:
                         yolo_detector.draw_result(results, pl.osd_img)
                         
+                        # 同步在原始帧上绘制，便于 HTTP 端直接使用 frame
+                        try:
+                            yolo_detector.draw_result(results, frame)
+                        except Exception:
+                            pass
+                        
                         # 处理检测结果（检查是否有息肉检测）
                         for det in results:
                             # 更新统计
@@ -362,20 +368,23 @@ class YOLOController:
                                 except Exception as e:
                                     print("[YOLO线程] 检测回调错误: " + str(e))
                 
-                # 更新视频流帧 - 始终发送osd_img
+                # 更新视频流帧 - 优先发送真实画面
                 if self.frame_callback:
                     try:
-                        # 确保osd_img不为None才发送
-                        if pl.osd_img is not None:
+                        # Prefer the original image.Image from PipeLine (pl.cur_frame) if available
+                        # This lets RTWebAdapter compress directly to JPEG without intermediate ndarray conversion
+                        if getattr(pl, 'cur_frame', None) is not None:
+                            target_img = pl.cur_frame
+                        else:
+                            target_img = frame if frame is not None else pl.osd_img
+                        if target_img is not None:
                             if loop_iteration <= 5:
                                 print("[YOLO线程] [迭代#%d] 调用 frame_callback..." % loop_iteration)
-                            self.frame_callback(pl.osd_img)
+                            self.frame_callback(target_img)
                             # 第一帧特别提示
                             if not first_frame_sent:
                                 print("[YOLO线程] ✅ 已发送第一帧到视频流")
                                 first_frame_sent = True
-                        elif loop_iteration <= 10:  # 前10次迭代时打印警告
-                            print("[YOLO线程] [迭代#%d] 警告: osd_img为None" % loop_iteration)
                     except Exception as e:
                         print("[YOLO线程] [迭代#%d] 帧回调错误: %s" % (loop_iteration, str(e)))
                         import sys
