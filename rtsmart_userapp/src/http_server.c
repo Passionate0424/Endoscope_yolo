@@ -21,9 +21,13 @@
 #include "http_handler.h"
 #include "../include/config.h"
 
+#ifndef RTSMART_WEB_PORTABLE
+
 #define SERVER_PORT 8080
 #define MAX_CLIENTS 5
 #define STACK_SIZE (16 * 1024)
+#define WORKER_COUNT 4               /* 固定工作线程数 */
+#define TASK_QUEUE_LEN 16            /* 任务队列长度 */
 #define ACCEPT_THREAD_PRIORITY (RT_THREAD_PRIORITY_MAX - 4)
 #define CLIENT_THREAD_PRIORITY (RT_THREAD_PRIORITY_MAX - 3)
 
@@ -35,6 +39,14 @@
 #define WIFI_CONNECT_MAX_RETRY 3
 #endif
 
+// 客户端上下文
+typedef struct client_ctx_t
+{
+    int client_fd;
+    struct sockaddr_in client_addr;
+} client_ctx_t;
+
+
 // 全局服务器状态
 static int server_fd = -1;
 static int server_running = 0;
@@ -42,13 +54,42 @@ static rt_thread_t accept_thread = RT_NULL;
 static rt_uint16_t client_thread_index = 0;
 static rt_sem_t wifi_ready_sem = RT_NULL;
 static rt_bool_t wifi_handlers_registered = RT_FALSE;
+/* 任务队列和 worker */
+static client_ctx_t task_queue[TASK_QUEUE_LEN];
+static int queue_head = 0;
+static int queue_tail = 0;
+static rt_mutex_t queue_lock = RT_NULL;
+static rt_sem_t queue_sem = RT_NULL; /* 记录未处理任务数 */
+static rt_thread_t worker_threads[WORKER_COUNT];
 
-// 客户端连接处理
-typedef struct
+
+static int queue_is_full(void)
 {
-    int client_fd;
-    struct sockaddr_in client_addr;
-} client_ctx_t;
+    int next = (queue_tail + 1) % TASK_QUEUE_LEN;
+    return next == queue_head;
+}
+
+static int queue_is_empty(void)
+{
+    return queue_head == queue_tail;
+}
+
+static void queue_push(const client_ctx_t *ctx)
+{
+    task_queue[queue_tail] = *ctx;
+    queue_tail = (queue_tail + 1) % TASK_QUEUE_LEN;
+}
+
+static int queue_pop(client_ctx_t *out)
+{
+    if (queue_is_empty())
+    {
+        return -1;
+    }
+    *out = task_queue[queue_head];
+    queue_head = (queue_head + 1) % TASK_QUEUE_LEN;
+    return 0;
+}
 
 static void client_handler_thread(void *parameter)
 {
@@ -131,11 +172,42 @@ static void client_handler_thread(void *parameter)
 cleanup:
     close(ctx->client_fd);
     rt_kprintf("[HTTP] Client disconnected\n");
-    rt_free(ctx);
     return;
 }
 
-// 接受连接线程
+/* worker 线程：循环处理任务，避免频繁创建/退出线程 */
+static void worker_thread_entry(void *parameter)
+{
+    (void)parameter;
+    client_ctx_t ctx_local;
+    while (1)
+    {
+        if (rt_sem_take(queue_sem, RT_WAITING_FOREVER) != RT_EOK)
+            continue;
+
+        rt_mutex_take(queue_lock, RT_WAITING_FOREVER);
+        int ret = queue_pop(&ctx_local);
+        rt_mutex_release(queue_lock);
+
+        if (ret != 0)
+        {
+            if (!server_running)
+                break;
+            continue;
+        }
+
+        if (!server_running)
+        {
+            close(ctx_local.client_fd);
+            break;
+        }
+
+        client_handler_thread(&ctx_local);
+    }
+}
+
+// 监听线程
+// accept thread
 static void accept_thread_func(void *parameter)
 {
     (void)parameter;
@@ -160,36 +232,23 @@ static void accept_thread_func(void *parameter)
             continue;
         }
 
-        // 创建客户端处理线程
-        client_ctx_t *ctx = (client_ctx_t *)rt_malloc(sizeof(client_ctx_t));
-        if (!ctx)
+        // enqueue client context
+        client_ctx_t ctx;
+        ctx.client_fd = client_fd;
+        ctx.client_addr = client_addr;
+
+        /* push to task queue */
+        rt_mutex_take(queue_lock, RT_WAITING_FOREVER);
+        if (queue_is_full())
         {
-            rt_kprintf("[HTTP] Failed to allocate client context\n");
+            rt_mutex_release(queue_lock);
+            rt_kprintf("[HTTP] Task queue full, drop connection\n");
             close(client_fd);
             continue;
         }
-
-        ctx->client_fd = client_fd;
-        ctx->client_addr = client_addr;
-
-        char thread_name[RT_NAME_MAX];
-        rt_snprintf(thread_name, sizeof(thread_name), "httpc%02d", client_thread_index++ % 100);
-
-        rt_thread_t client_thread = rt_thread_create(thread_name,
-                                                     client_handler_thread,
-                                                     ctx,
-                                                     STACK_SIZE,
-                                                     CLIENT_THREAD_PRIORITY,
-                                                     10);
-        if (client_thread == RT_NULL)
-        {
-            rt_kprintf("[HTTP] Failed to create client thread\n");
-            close(client_fd);
-            rt_free(ctx);
-            continue;
-        }
-
-        rt_thread_startup(client_thread);
+        queue_push(&ctx);
+        rt_mutex_release(queue_lock);
+        rt_sem_release(queue_sem);
     }
 
     rt_kprintf("[HTTP] Accept thread stopped\n");
@@ -256,6 +315,53 @@ int http_server_init(void)
     }
 
     rt_kprintf("[HTTP] Server listening on port %d\n", SERVER_PORT);
+    /* 初始化任务队列 */
+    queue_head = queue_tail = 0;
+    queue_lock = rt_mutex_create("httpq", RT_IPC_FLAG_PRIO);
+    if (queue_lock == RT_NULL)
+    {
+        rt_kprintf("[HTTP] Failed to create queue mutex\n");
+        close(server_fd);
+        server_fd = -1;
+        http_handler_deinit();
+        frame_buffer_deinit();
+        return -1;
+    }
+
+    queue_sem = rt_sem_create("httpq", 0, RT_IPC_FLAG_PRIO);
+    if (queue_sem == RT_NULL)
+    {
+        rt_kprintf("[HTTP] Failed to create queue semaphore\n");
+        rt_mutex_delete(queue_lock);
+        queue_lock = RT_NULL;
+        close(server_fd);
+        server_fd = -1;
+        http_handler_deinit();
+        frame_buffer_deinit();
+        return -1;
+    }
+
+    /* 启动 worker 线程 */
+    for (int i = 0; i < WORKER_COUNT; i++)
+    {
+        char name[8];
+        rt_snprintf(name, sizeof(name), "httpw%d", i);
+        worker_threads[i] = rt_thread_create(name,
+                                             worker_thread_entry,
+                                             RT_NULL,
+                                             STACK_SIZE,
+                                             CLIENT_THREAD_PRIORITY,
+                                             20);
+        if (worker_threads[i])
+        {
+            rt_thread_startup(worker_threads[i]);
+        }
+        else
+        {
+            rt_kprintf("[HTTP] Warning: create worker %d failed\n", i);
+        }
+    }
+
 
     // 创建接受连接线程
     server_running = 1;
@@ -271,6 +377,16 @@ int http_server_init(void)
         close(server_fd);
         server_fd = -1;
         server_running = 0;
+        if (queue_sem)
+        {
+            rt_sem_delete(queue_sem);
+            queue_sem = RT_NULL;
+        }
+        if (queue_lock)
+        {
+            rt_mutex_delete(queue_lock);
+            queue_lock = RT_NULL;
+        }
         http_handler_deinit();
         frame_buffer_deinit();
         return -1;
@@ -296,6 +412,14 @@ void http_server_deinit(void)
             server_fd = -1;
         }
 
+        if (queue_sem)
+        {
+            for (int i = 0; i < WORKER_COUNT; i++)
+            {
+                rt_sem_release(queue_sem);
+            }
+        }
+
         while (accept_thread != RT_NULL)
         {
             rt_thread_mdelay(50);
@@ -304,6 +428,17 @@ void http_server_deinit(void)
         http_handler_deinit();
         // 清理帧缓冲
         frame_buffer_deinit();
+
+        if (queue_sem)
+        {
+            rt_sem_delete(queue_sem);
+            queue_sem = RT_NULL;
+        }
+        if (queue_lock)
+        {
+            rt_mutex_delete(queue_lock);
+            queue_lock = RT_NULL;
+        }
 
         rt_kprintf("[HTTP] Server stopped\n");
     }
@@ -637,3 +772,345 @@ int http_server_autostart(void)
 
 // 注册到系统初始化（在 FinSH 之后运行）
 INIT_APP_EXPORT(http_server_autostart);
+#else /* RTSMART_WEB_PORTABLE */
+
+/* POSIX �ļ���: �� MicroPython ���캯���£������̶������̳߳� HTTP ������ */
+
+#include <pthread.h>
+#include <semaphore.h>
+#include <errno.h>
+#include <time.h>
+#define rt_strncpy strncpy
+/* 避免 dfs_posix.h 与 unistd 的 read/write 冲突，直接声明需要的接口 */
+extern int close(int fd);
+extern int shutdown(int fd, int how);
+extern int usleep(unsigned int usec);
+
+#define SERVER_PORT 8080
+#define MAX_CLIENTS 5
+#define WORKER_COUNT 4
+#define TASK_QUEUE_LEN 16
+
+typedef struct
+{
+    int client_fd;
+    struct sockaddr_in client_addr;
+} client_ctx_t;
+
+static int server_fd = -1;
+static volatile int server_running = 0;
+static pthread_t accept_thread;
+static pthread_t worker_threads[WORKER_COUNT];
+static client_ctx_t task_queue[TASK_QUEUE_LEN];
+static int queue_head = 0;
+static int queue_tail = 0;
+static pthread_mutex_t queue_lock = PTHREAD_MUTEX_INITIALIZER;
+static sem_t queue_sem;
+
+static int queue_is_full(void)
+{
+    int next = (queue_tail + 1) % TASK_QUEUE_LEN;
+    return next == queue_head;
+}
+
+static int queue_is_empty(void)
+{
+    return queue_head == queue_tail;
+}
+
+static void queue_push(const client_ctx_t *ctx)
+{
+    task_queue[queue_tail] = *ctx;
+    queue_tail = (queue_tail + 1) % TASK_QUEUE_LEN;
+}
+
+static int queue_pop(client_ctx_t *out)
+{
+    if (queue_is_empty())
+    {
+        return -1;
+    }
+    *out = task_queue[queue_head];
+    queue_head = (queue_head + 1) % TASK_QUEUE_LEN;
+    return 0;
+}
+
+/* 复用与 RT 版本一致的请求处理逻辑 */
+static void client_handler_thread(void *parameter)
+{
+    client_ctx_t *ctx = (client_ctx_t *)parameter;
+    char buffer[2048];
+    int n;
+
+    printf("[HTTP] Client connected from %s:%d\n",
+           inet_ntoa(ctx->client_addr.sin_addr),
+           ntohs(ctx->client_addr.sin_port));
+
+    n = recv(ctx->client_fd, buffer, sizeof(buffer) - 1, 0);
+    if (n <= 0)
+    {
+        printf("[HTTP] Failed to read request\n");
+        goto cleanup;
+    }
+    buffer[n] = '\0';
+
+    char method[8] = {0};
+    char url[256] = {0};
+
+    if (sscanf(buffer, "%7s %255s", method, url) != 2)
+    {
+        http_send_404(ctx->client_fd);
+        goto cleanup;
+    }
+
+    char *body = strstr(buffer, "\r\n\r\n");
+    if (body)
+        body += 4;
+    else
+        body = buffer + n;
+
+    char path[256];
+    rt_strncpy(path, url, sizeof(path));
+    char *query = NULL;
+    char *query_pos = strchr(path, '?');
+    if (query_pos)
+    {
+        *query_pos = '\0';
+        query = query_pos + 1;
+    }
+
+    if (strcmp(method, "GET") == 0)
+    {
+        if (strcmp(path, "/stream") == 0)
+        {
+            http_handle_mjpeg_stream(ctx->client_fd);
+        }
+        else if (strcmp(path, "/snapshot") == 0)
+        {
+            http_handle_snapshot(ctx->client_fd);
+        }
+        else if (strncmp(path, "/api/", 5) == 0)
+        {
+            http_handle_api_request(ctx->client_fd, method, path, query, body);
+        }
+        else
+        {
+            http_handle_static_request(ctx->client_fd, path);
+        }
+    }
+    else if (strcmp(method, "POST") == 0 || strcmp(method, "DELETE") == 0)
+    {
+        if (strncmp(path, "/api/", 5) == 0)
+        {
+            http_handle_api_request(ctx->client_fd, method, path, query, body);
+        }
+        else
+        {
+            http_send_404(ctx->client_fd);
+        }
+    }
+    else
+    {
+        http_send_404(ctx->client_fd);
+    }
+
+cleanup:
+    close(ctx->client_fd);
+    printf("[HTTP] Client disconnected\n");
+    return;
+}
+
+static void *worker_thread_entry(void *parameter)
+{
+    (void)parameter;
+    client_ctx_t ctx_local;
+    while (1)
+    {
+        sem_wait(&queue_sem);
+
+        pthread_mutex_lock(&queue_lock);
+        int ret = queue_pop(&ctx_local);
+        pthread_mutex_unlock(&queue_lock);
+
+        if (ret != 0)
+        {
+            if (!server_running)
+                break;
+            continue;
+        }
+
+        if (!server_running)
+        {
+            close(ctx_local.client_fd);
+            break;
+        }
+
+        client_handler_thread(&ctx_local);
+    }
+    return NULL;
+}
+
+static void *accept_thread_func(void *parameter)
+{
+    (void)parameter;
+    struct sockaddr_in client_addr;
+    socklen_t addr_len;
+    int client_fd;
+
+    printf("[HTTP] Accept thread started\n");
+
+    while (server_running)
+    {
+        addr_len = sizeof(client_addr);
+        client_fd = accept(server_fd, (struct sockaddr *)&client_addr, &addr_len);
+
+        if (client_fd < 0)
+        {
+            if (server_running)
+            {
+                printf("[HTTP] Accept failed: %d\n", errno);
+                usleep(100 * 1000);
+            }
+            continue;
+        }
+
+        client_ctx_t ctx;
+        ctx.client_fd = client_fd;
+        ctx.client_addr = client_addr;
+
+        pthread_mutex_lock(&queue_lock);
+        if (queue_is_full())
+        {
+            pthread_mutex_unlock(&queue_lock);
+            printf("[HTTP] Task queue full, drop connection\n");
+            close(client_fd);
+            continue;
+        }
+        queue_push(&ctx);
+        pthread_mutex_unlock(&queue_lock);
+        sem_post(&queue_sem);
+    }
+
+    printf("[HTTP] Accept thread stopped\n");
+    return NULL;
+}
+
+int http_server_init(void)
+{
+    struct sockaddr_in server_addr;
+    int opt = 1;
+
+    if (frame_buffer_init(FRAME_BUFFER_QUALITY) != 0)
+    {
+        printf("[HTTP] Failed to init frame buffer\n");
+        return -1;
+    }
+
+    http_handler_init();
+
+    server_fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (server_fd < 0)
+    {
+        printf("[HTTP] Failed to create socket, errno=%d\n", errno);
+        http_handler_deinit();
+        frame_buffer_deinit();
+        return -1;
+    }
+
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    memset(&server_addr, 0, sizeof(server_addr));
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port = htons(SERVER_PORT);
+
+    if (bind(server_fd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
+    {
+        printf("[HTTP] Failed to bind socket, errno=%d\n", errno);
+        close(server_fd);
+        server_fd = -1;
+        http_handler_deinit();
+        frame_buffer_deinit();
+        return -1;
+    }
+
+    if (listen(server_fd, MAX_CLIENTS) < 0)
+    {
+        printf("[HTTP] Failed to listen, errno=%d\n", errno);
+        close(server_fd);
+        server_fd = -1;
+        http_handler_deinit();
+        frame_buffer_deinit();
+        return -1;
+    }
+
+    printf("[HTTP] Server listening on port %d\n", SERVER_PORT);
+
+    queue_head = queue_tail = 0;
+    sem_init(&queue_sem, 0, 0);
+
+    server_running = 1;
+
+    for (int i = 0; i < WORKER_COUNT; i++)
+    {
+        if (pthread_create(&worker_threads[i], NULL, worker_thread_entry, NULL) != 0)
+        {
+            printf("[HTTP] Warning: create worker %d failed\n", i);
+        }
+    }
+
+    if (pthread_create(&accept_thread, NULL, accept_thread_func, NULL) != 0)
+    {
+        printf("[HTTP] Failed to create accept thread\n");
+        server_running = 0;
+        close(server_fd);
+        server_fd = -1;
+        sem_destroy(&queue_sem);
+        http_handler_deinit();
+        frame_buffer_deinit();
+        return -1;
+    }
+
+    printf("[HTTP] Server started successfully\n");
+    return 0;
+}
+
+void http_server_deinit(void)
+{
+    if (!server_running)
+        return;
+
+    server_running = 0;
+
+    if (server_fd >= 0)
+    {
+        shutdown(server_fd, SHUT_RDWR);
+        close(server_fd);
+        server_fd = -1;
+    }
+
+    for (int i = 0; i < WORKER_COUNT; i++)
+    {
+        sem_post(&queue_sem);
+    }
+
+    pthread_join(accept_thread, NULL);
+    for (int i = 0; i < WORKER_COUNT; i++)
+    {
+        if (worker_threads[i])
+            pthread_join(worker_threads[i], NULL);
+    }
+
+    sem_destroy(&queue_sem);
+
+    http_handler_deinit();
+    frame_buffer_deinit();
+
+    printf("[HTTP] Server stopped\n");
+}
+
+int http_server_autostart(void)
+{
+    return http_server_init();
+}
+#endif /* RTSMART_WEB_PORTABLE */

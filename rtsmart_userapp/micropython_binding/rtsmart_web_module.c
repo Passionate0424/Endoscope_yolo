@@ -10,8 +10,15 @@
 
 #ifndef RTSMART_WEB_PORTABLE
 #include <rtthread.h>
+#else
+#include <stdio.h>
 #endif
 
+#include "http_server.h"
+#ifndef HTTP_SERVER_AUTOSTART_DECLARED
+#define HTTP_SERVER_AUTOSTART_DECLARED
+extern int http_server_autostart(void);
+#endif
 #include "frame_buffer.h"
 #include "web_state.h"
 #include "config.h"
@@ -124,6 +131,13 @@ STATIC mp_obj_t rtsmart_web_get_stats(void)
 }
 STATIC MP_DEFINE_CONST_FUN_OBJ_0(rtsmart_web_get_stats_obj, rtsmart_web_get_stats);
 
+STATIC mp_obj_t rtsmart_web_start_server(void)
+{
+    http_server_autostart();
+    return mp_const_none;
+}
+STATIC MP_DEFINE_CONST_FUN_OBJ_0(rtsmart_web_start_server_obj, rtsmart_web_start_server);
+
 STATIC const mp_rom_map_elem_t rtsmart_web_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR___name__), MP_ROM_QSTR(MP_QSTR_rtsmart_web)},
     {MP_ROM_QSTR(MP_QSTR_push_frame), MP_ROM_PTR(&rtsmart_web_push_frame_obj)},
@@ -135,6 +149,7 @@ STATIC const mp_rom_map_elem_t rtsmart_web_module_globals_table[] = {
     {MP_ROM_QSTR(MP_QSTR_delete_record), MP_ROM_PTR(&rtsmart_web_delete_record_obj)},
     {MP_ROM_QSTR(MP_QSTR_clear_records), MP_ROM_PTR(&rtsmart_web_clear_records_obj)},
     {MP_ROM_QSTR(MP_QSTR_get_stats), MP_ROM_PTR(&rtsmart_web_get_stats_obj)},
+    {MP_ROM_QSTR(MP_QSTR_start_server), MP_ROM_PTR(&rtsmart_web_start_server_obj)},
 };
 STATIC MP_DEFINE_CONST_DICT(rtsmart_web_module_globals, rtsmart_web_module_globals_table);
 

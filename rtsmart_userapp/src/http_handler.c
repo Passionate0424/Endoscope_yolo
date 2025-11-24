@@ -6,15 +6,47 @@
 #include "http_handler.h"
 #include "frame_buffer.h"
 #include "static_assets.h"
-#include "web_state.h"
+#ifndef RTSMART_WEB_PORTABLE
 #include <rtthread.h>
 #include <dfs_posix.h>
+#else
+#include "py/mphal.h"
+#include <time.h>
+#include <unistd.h>
+#include <errno.h>
+typedef uint32_t rt_uint32_t;
+#ifndef RT_TICK_PER_SECOND
+#define RT_TICK_PER_SECOND 1000
+#endif
+// Use POSIX time/sleep in portable build to avoid depending on MicroPython per-thread state
+static inline rt_uint32_t portable_tick_get(void)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (rt_uint32_t)(ts.tv_sec * 1000U + ts.tv_nsec / 1000000U);
+}
+static inline void portable_thread_mdelay(int ms)
+{
+    if (ms > 0)
+    {
+        usleep((useconds_t)ms * 1000U);
+    }
+}
+#define rt_tick_get() portable_tick_get()
+#define rt_thread_mdelay(ms) portable_thread_mdelay(ms)
+#define rt_kprintf printf
+#define rt_snprintf snprintf
+#define rt_malloc malloc
+#define rt_free free
+#endif
+#include "web_state.h"
 #include <fcntl.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdint.h>
 #include <ctype.h>
 
 // ⭐ 使用标准 libc 的 snprintf（支持浮点数），而不是 RT-Thread 的 rt_snprintf
@@ -443,8 +475,6 @@ int http_handle_mjpeg_stream(int client_fd)
     rt_uint32_t stream_start_ms = http_get_tick_ms();
     rt_uint32_t last_frame_time_ms = 0;
     int no_frame_count = 0;
-    const int MAX_NO_FRAME_COUNT = 300; // 3秒无帧超时 (300 * 10ms)
-
     const char *stream_header =
         "HTTP/1.1 200 OK\r\n"
         "Content-Type: multipart/x-mixed-replace; boundary=" MJPEG_BOUNDARY "\r\n"

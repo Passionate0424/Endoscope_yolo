@@ -69,86 +69,18 @@ class RTWebAdapter:
         print("[RTWeb] ✅ C 层 HTTP 服务器已就绪")
         print("[RTWeb] 调试模式：将详细记录前 20 帧的推送情况")
         print("[RTWeb] ⚠️ 使用 HTTP API 读取控制信息 (http://%s:%d/api/status)" % (self.http_api_host, self.http_api_port))
-    
+
     def update_frame(self, image):
         """
-        由 YOLO 检测线程调用，推送帧到 C 层
+        由 YOLO 线程调用，将帧推送到 C 端
         
         Args:
             image: CanMV image 对象
         """
-        if not self.use_c_server:
-            return
-        
-        self._frame_count += 1
-        current_time = time.time()
-        is_debug_frame = (self._frame_count <= 20)
-        
-        try:
-            # 编码为 JPEG
-            if is_debug_frame:
-                print("[RTWeb] [帧#%d] 开始编码 JPEG..." % self._frame_count)
-            
-            jpeg_bytes = image.compress(quality=self.quality)
-            
-            if jpeg_bytes is None or len(jpeg_bytes) == 0:
-                if is_debug_frame or self._frame_count % 100 == 0:
-                    print("[RTWeb] [帧#%d] ⚠️ JPEG 编码失败或为空" % self._frame_count)
-                self._push_fail_count += 1
-                return
-            
-            if is_debug_frame:
-                print("[RTWeb] [帧#%d] JPEG 编码成功，大小: %d 字节" % (self._frame_count, len(jpeg_bytes)))
-            
-            # 推送到 C 层 frame_buffer
-            try:
-                rtsmart_web.push_frame(jpeg_bytes)
-                self._push_success_count += 1
-                
-                if self._first_push_time == 0:
-                    self._first_push_time = current_time
-                
-                # 计算推送频率
-                interval = 0
-                if self._last_push_time > 0:
-                    interval = current_time - self._last_push_time
-                    fps = 1.0 / interval if interval > 0 else 0
-                else:
-                    fps = 0
-                self._last_push_time = current_time
-                
-                # 详细日志（前20帧或每100帧）
-                if is_debug_frame:
-                    print("[RTWeb] [帧#%d] ✅ push_frame 成功 (大小: %d 字节, 间隔: %.3fs, 推送FPS: %.1f)" % 
-                          (self._frame_count, len(jpeg_bytes), interval, fps))
-                    # 警告：如果推送频率太低，MJPEG 流会挂起
-                    if fps < 5 and self._frame_count > 5:
-                        print("[RTWeb] ⚠️ 警告：推送频率太低 (%.1f fps)，MJPEG 流可能需要 10+ fps" % fps)
-                elif self._frame_count % 100 == 0:
-                    success_rate = (self._push_success_count / self._frame_count * 100) if self._frame_count > 0 else 0
-                    avg_fps = 1.0 / interval if interval > 0 else 0
-                    print("[RTWeb] [帧#%d] ✅ 已推送 %d 帧 (成功: %d, 失败: %d, 成功率: %.1f%%, 平均FPS: %.1f)" % 
-                          (self._frame_count, self._push_success_count, self._push_success_count, 
-                           self._push_fail_count, success_rate, avg_fps))
-                
-                if self._frame_count % 100 == 0:
-                    gc.collect()  # 定期 GC
-                    
-            except OSError as e:
-                # push_frame 失败会抛出 OSError
-                self._push_fail_count += 1
-                if is_debug_frame or self._frame_count % 100 == 0:
-                    print("[RTWeb] [帧#%d] ❌ push_frame 失败: %s" % (self._frame_count, str(e)))
-                    import sys
-                    sys.print_exception(e)
-            
-        except Exception as e:
-            self._push_fail_count += 1
-            if is_debug_frame or self._frame_count % 100 == 0:
-                print("[RTWeb] [帧#%d] ❌ 推送帧异常: %s" % (self._frame_count, str(e)))
-                import sys
-                sys.print_exception(e)
-    
+        # 临时禁用推帧（排查崩溃）
+        return
+
+
     def is_ready(self):
         """检查 C 服务器是否就绪"""
         if not self.use_c_server:

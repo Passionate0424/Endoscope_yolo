@@ -6,6 +6,7 @@ CPPPATH = [cwd, cwd + "/include"]
 # HTTP 服务器源文件
 src = Glob("http_service.c")
 src += Glob("src/*.c")
+src += Glob("src/*.cpp")
 
 group = DefineGroup("app_http_server", src, depend = [""], CPPPATH = CPPPATH)
 

@@ -13,6 +13,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 typedef pthread_mutex_t rt_mutex_t;
 typedef int32_t rt_int32_t;
 typedef uint32_t rt_tick_t;
@@ -37,7 +38,10 @@ static inline void rt_mutex_release(rt_mutex_t *m) {
     pthread_mutex_unlock(m);
 }
 static inline rt_tick_t rt_tick_get(void) {
-    return (rt_tick_t)(mp_hal_ticks_ms());
+    // Avoid relying on MicroPython state inside detached pthreads
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (rt_tick_t)(ts.tv_sec * 1000U + ts.tv_nsec / 1000000U);
 }
 #endif
 #include <string.h>
