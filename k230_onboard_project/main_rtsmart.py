@@ -44,14 +44,14 @@ def main():
     yolo = YOLOController()
     yolo.set_frame_callback(web_adapter.update_frame)
 
-    # 4. 启动摄像头（不启用检测）
-    yolo.start_camera()
-    time.sleep(0.5)
-    web_adapter.update_runtime(
-        yolo.camera_running,
-        yolo.detection_enabled,
-        yolo.confidence_threshold,
-    )
+    # # 4. 启动摄像头（不启用检测）
+    # yolo.start_camera()
+    # time.sleep(0.5)
+    # web_adapter.update_runtime(
+    #     yolo.camera_running,
+    #     yolo.detection_enabled,
+    #     yolo.confidence_threshold,
+    # )
 
     stats = web_adapter.get_stats()
     port = stats.get("port", 8080)

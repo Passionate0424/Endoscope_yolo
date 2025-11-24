@@ -790,6 +790,7 @@ extern int usleep(unsigned int usec);
 #define MAX_CLIENTS 5
 #define WORKER_COUNT 4
 #define TASK_QUEUE_LEN 16
+#define PTHREAD_STACK_SIZE (64 * 1024)
 
 typedef struct
 {
@@ -1051,15 +1052,22 @@ int http_server_init(void)
 
     server_running = 1;
 
+    pthread_attr_t worker_attr;
+    pthread_attr_init(&worker_attr);
+    pthread_attr_setstacksize(&worker_attr, PTHREAD_STACK_SIZE);
     for (int i = 0; i < WORKER_COUNT; i++)
     {
-        if (pthread_create(&worker_threads[i], NULL, worker_thread_entry, NULL) != 0)
+        if (pthread_create(&worker_threads[i], &worker_attr, worker_thread_entry, NULL) != 0)
         {
             printf("[HTTP] Warning: create worker %d failed\n", i);
         }
     }
+    pthread_attr_destroy(&worker_attr);
 
-    if (pthread_create(&accept_thread, NULL, accept_thread_func, NULL) != 0)
+    pthread_attr_t accept_attr;
+    pthread_attr_init(&accept_attr);
+    pthread_attr_setstacksize(&accept_attr, PTHREAD_STACK_SIZE);
+    if (pthread_create(&accept_thread, &accept_attr, accept_thread_func, NULL) != 0)
     {
         printf("[HTTP] Failed to create accept thread\n");
         server_running = 0;
@@ -1068,8 +1076,10 @@ int http_server_init(void)
         sem_destroy(&queue_sem);
         http_handler_deinit();
         frame_buffer_deinit();
+        pthread_attr_destroy(&accept_attr);
         return -1;
     }
+    pthread_attr_destroy(&accept_attr);
 
     printf("[HTTP] Server started successfully\n");
     return 0;

@@ -72,13 +72,28 @@ class RTWebAdapter:
 
     def update_frame(self, image):
         """
-        由 YOLO 线程调用，将帧推送到 C 端
-        
+        由推流逻辑调用，将帧推送到 C 端 HTTP MJPEG 缓冲
+
         Args:
-            image: CanMV image 对象
+            image: CanMV image 对象（通常是 PipeLine.osd_img）
         """
-        # 临时禁用推帧（排查崩溃）
-        return
+        if not self.use_c_server or image is None:
+            return
+
+        try:
+            # 将图像压缩为 JPEG，再写入 C 端帧缓冲
+            jpeg_bytes = image.compress(quality=self.quality)
+            import rtsmart_web
+
+            rtsmart_web.push_frame(jpeg_bytes)
+
+            self._frame_count += 1
+            if self._frame_count <= 20:
+                print(f"[RTWeb] 推送第 {self._frame_count} 帧，大小 {len(jpeg_bytes)} 字节")
+        except Exception as e:
+            self._push_fail_count += 1
+            if self._push_fail_count <= 10 or self._push_fail_count % 50 == 0:
+                print("[RTWeb] ⚠️ 推帧失败:", e)
 
 
     def is_ready(self):
