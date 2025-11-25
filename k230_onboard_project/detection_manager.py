@@ -84,17 +84,18 @@ class DetectionManager:
             filename = f"detection_{timestamp}.jpg"
             filepath = self.save_dir + '/' + filename  # MicroPython手动拼接路径
             
-            # 保存图像
-            if hasattr(image, 'compressed'):
-                # K230 image对象使用compressed()方法
-                jpeg_data = image.compressed(quality=85)
+            # 保存图像 - 使用CanMV官方API
+            # CanMV image.Image对象使用compress()方法（不是compressed()）
+            if hasattr(image, 'compress'):
+                # CanMV官方API: image.compress(quality) 返回JPEG bytes
+                jpeg_data = image.compress(quality=85)
                 with open(filepath, 'wb') as f:
                     f.write(bytes(jpeg_data))
             elif hasattr(image, 'save'):
-                # 标准PIL/OpenCV方式
+                # 标准PIL方式（兼容性处理）
                 image.save(filepath, quality=85)
             else:
-                print("图像对象不支持压缩或保存: " + str(type(image)))
+                print("图像对象不支持压缩或保存: %s (需要image.Image对象)" % type(image))
                 return None
                 
             # 创建记录

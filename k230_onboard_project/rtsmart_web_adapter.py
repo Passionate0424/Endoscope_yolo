@@ -26,9 +26,14 @@ class RTWebAdapter:
     - 适配器仅接受 `image.Image` 对象或已经压缩的 JPEG bytes。
     - 请尽量把 `pl.cur_frame`（image.Image）传入 `update_frame()`，或在用户代码里先调用 `image.compress()` 再传入 bytes。
     - 不要把 ulab/ndarray (3,H,W) 直接传给 adapter（此代码不再做隐式 ndarray->Image 转换）。
+    
+    参数:
+    - control_poll_interval_ms: HTTP 控制轮询的最小间隔（毫秒）; 较小值会导致更多的 socket 请求，可能引发超时
+    - use_http_api_for_control: 是否通过 HTTP API (/api/status) 获取控制信息；关闭时使用 C 绑定（rtsmart_web.get_control）
+    - min_push_interval_ms: 推帧的最小间隔（毫秒），用于限制推送速度，避免后端/网络瓶颈
     """
     
-    def __init__(self, quality=75, http_api_host="127.0.0.1", http_api_port=8080):
+    def __init__(self, quality=75, http_api_host="127.0.0.1", http_api_port=8080, control_poll_interval_ms=1000, use_http_api_for_control=True, min_push_interval_ms=0):
         self.quality = quality
         self.use_c_server = HAS_C_SERVER
         # No ndarray conversion; adapter expects image.Image or JPEG bytes
@@ -37,6 +42,11 @@ class RTWebAdapter:
         self._push_fail_count = 0
         self._last_push_time = 0
         self._first_push_time = 0
+        # Control polling configuration: throttle HTTP polling to avoid frequent connect timeouts
+        self._last_control_poll = 0
+        self._control_poll_interval_ms = control_poll_interval_ms
+        # 最小推帧间隔 (ms)，大于 0 时启用限速
+        self._min_push_interval_ms = int(min_push_interval_ms)
         
         # ⭐ HTTP API 配置（用于读取状态）
         # 
@@ -53,7 +63,7 @@ class RTWebAdapter:
         # 详见：docs/WEB_STATE_SHARING.md
         self.http_api_host = http_api_host
         self.http_api_port = http_api_port
-        self._use_http_api_for_control = True  # 使用 HTTP API 读取控制信息
+        self._use_http_api_for_control = use_http_api_for_control  # 使用 HTTP API 读取控制信息（可通过参数关闭）
         
         # 尝试获取本地 IP 地址（如果 http_api_host 是默认值）
         if self.http_api_host == "127.0.0.1":
@@ -74,7 +84,30 @@ class RTWebAdapter:
         # HTTP 服务器已通过 C 层自动启动机制运行，无需手动启动
         print("[RTWeb] ✅ C 层 HTTP 服务器已就绪")
         print("[RTWeb] 调试模式：将详细记录前 20 帧的推送情况")
-        print("[RTWeb] ⚠️ 使用 HTTP API 读取控制信息 (http://%s:%d/api/status)" % (self.http_api_host, self.http_api_port))
+        if self._use_http_api_for_control:
+            print("[RTWeb] ⚠️ 使用 HTTP API 读取控制信息 (http://%s:%d/api/status)" % (self.http_api_host, self.http_api_port))
+        else:
+            print("[RTWeb] ⚠️ 已禁用 HTTP API 读取控制信息，回退为 C 绑定读取 (rtsmart_web.get_control)")
+        
+        # 调试计数器：记录 HTTP GET 请求失败次数，避免日志刷屏
+        self._http_fail_count = 0
+    def set_control_poll_interval(self, ms):
+        """设置 control poll 最小间隔（毫秒）以限制 HTTP 请求频率"""
+        try:
+            self._control_poll_interval_ms = int(ms)
+        except Exception:
+            pass
+
+    def get_control_poll_interval(self):
+        """返回当前的 control poll 间隔（毫秒）"""
+        return self._control_poll_interval_ms
+
+    def set_min_push_interval(self, ms):
+        """设置最小推帧间隔（毫秒），大于 0 时启用限速。"""
+        try:
+            self._min_push_interval_ms = int(ms)
+        except Exception:
+            pass
 
     def update_frame(self, image):
         """
@@ -87,14 +120,23 @@ class RTWebAdapter:
             return
 
         try:
-            # Debug logging: incoming type and shape (if available)
-            try:
-                incoming_type = type(image)
-                incoming_shape = getattr(image, 'shape', None)
-            except Exception:
-                incoming_type = type(image)
-                incoming_shape = None
-            print("[RTWeb] Incoming frame type:", incoming_type, "shape=", incoming_shape)
+            # Debug logging: incoming type and shape (only for first few frames)
+            if self._frame_count < 3:
+                try:
+                    incoming_type = type(image)
+                    incoming_shape = getattr(image, 'shape', None)
+                    has_compress = hasattr(image, 'compress')
+                    print("[RTWeb] 帧类型: %s, shape=%s, has_compress=%s" % (incoming_type, incoming_shape, has_compress))
+                except Exception:
+                    pass
+
+            now_ms = int(time.time() * 1000)
+            # 如果设置了最小推帧间隔，先检查是否需要 skip
+            if self._min_push_interval_ms > 0 and (now_ms - self._last_push_time) < self._min_push_interval_ms:
+                # skip this frame to avoid overloading the backend
+                if self._frame_count <= 5:
+                    print(f"[RTWeb] 🔇 跳过推送（速率限制）：已上次推送 {now_ms - self._last_push_time} ms 前")
+                return
 
             # If the caller passed already-compressed JPEG bytes, push directly
             if isinstance(image, (bytes, bytearray)):
@@ -113,6 +155,7 @@ class RTWebAdapter:
                     pass
 
                 rtsmart_web.push_frame(image)
+                self._last_push_time = int(time.time() * 1000)
                 self._frame_count += 1
                 if self._frame_count <= 20:
                     print(f"[RTWeb] 推送第 {self._frame_count} 帧（bytes），大小 {len(image)} 字节")
@@ -124,21 +167,24 @@ class RTWebAdapter:
                 # Unsupported type: do not attempt complex ndarray conversions here
                 print("[RTWeb] ⚠️ Unsupported frame type: %s. Pass `image.Image` or JPEG bytes (image.compress())." % type(image))
                 return
-            # Debug: print JPEG head/tail for early frames
-            try:
-                if len(jpeg_bytes) >= 4:
-                    head = jpeg_bytes[:4]
-                    tail = jpeg_bytes[-2:]
-                    if not (head[0] == 0xFF and head[1] == 0xD8):
-                        print("[RTWeb] ⚠️ Compressed JPEG head magic mismatch:", head)
-                    if not (tail[0] == 0xFF and tail[1] == 0xD9):
-                        print("[RTWeb] ⚠️ Compressed JPEG tail magic mismatch:", tail)
-                    print("[RTWeb] Compressed JPEG head=", head, "tail=", tail, "len=", len(jpeg_bytes))
-            except Exception:
-                pass
+            # Debug: verify JPEG format (only for first few frames)
+            if self._frame_count < 3:
+                try:
+                    if len(jpeg_bytes) >= 4:
+                        head = jpeg_bytes[:4]
+                        tail = jpeg_bytes[-2:]
+                        is_valid = (head[0] == 0xFF and head[1] == 0xD8 and 
+                                   tail[0] == 0xFF and tail[1] == 0xD9)
+                        if is_valid:
+                            print("[RTWeb] ✅ JPEG格式正确，大小: %d 字节" % len(jpeg_bytes))
+                        else:
+                            print("[RTWeb] ⚠️ JPEG格式异常: head=%s, tail=%s" % (head, tail))
+                except Exception:
+                    pass
             import rtsmart_web
 
             rtsmart_web.push_frame(jpeg_bytes)
+            self._last_push_time = int(time.time() * 1000)
 
             self._frame_count += 1
             if self._frame_count <= 20:
@@ -148,20 +194,6 @@ class RTWebAdapter:
             if self._push_fail_count <= 10 or self._push_fail_count % 50 == 0:
                 print("[RTWeb] ⚠️ 推帧失败:", e)
 
-    def _ensure_image_obj(self, src):
-        """
-        简化版本：仅接受 `image.Image` 对象。
-        - 如果传入的是 `image.Image`（带 compress 方法），直接返回
-        - 对于其他类型（ndarray 等），打印提示并返回 None。
-        """
-        if src is None:
-            return None
-        if hasattr(src, "compress"):
-            return src
-        print("[RTWeb] ⚠️ Unsupported frame type: %s. Pass an `image.Image` or JPEG bytes (image.compress())." % type(src))
-        return None
-            
-    
     def _http_get_status(self):
         """通过 HTTP API 获取状态"""
         # 尝试地址：实际 IP 和 localhost
@@ -176,8 +208,15 @@ class RTWebAdapter:
                 
                 try:
                     sock.connect((host, self.http_api_port))
-                except (socket.timeout, OSError):
+                except (socket.timeout, OSError) as e:
                     # 连接失败，关闭 socket 并尝试下一个地址
+                    # 限制打印频率，避免日志被频繁的连接错误淹没
+                    try:
+                        self._http_fail_count += 1
+                        if self._http_fail_count <= 10 or self._http_fail_count % 50 == 0:
+                            print("[RTWeb] ⚠️ HTTP connect to %s:%d failed: %s" % (host, self.http_api_port, str(e)))
+                    except Exception:
+                        pass
                     try:
                         sock.close()
                     except:
@@ -195,7 +234,7 @@ class RTWebAdapter:
                     sock.send(request.encode('utf-8'))
                     
                     # 接收响应（设置超时）
-                    sock.settimeout(0.5)  # 0.5 秒接收超时
+                    sock.settimeout(1.0)  # 1.0 秒接收超时（增加容忍）
                     response = b""
                     try:
                         while True:
@@ -206,9 +245,15 @@ class RTWebAdapter:
                             # 限制响应大小，避免内存溢出
                             if len(response) > 8192:
                                 break
-                    except socket.timeout:
-                        pass  # 超时也算收到部分数据
+                    except Exception as e:
+                        # 记录异常详细信息以便诊断连接问题
+                        print("[RTWeb] ⚠️ _http_get_status recv error:", e)
                     
+                    # 成功接收到响应；重置错误计数器
+                    try:
+                        self._http_fail_count = 0
+                    except Exception:
+                        pass
                     # 关闭 socket
                     try:
                         sock.close()
@@ -284,9 +329,15 @@ class RTWebAdapter:
         if not self.use_c_server:
             return None
 
+        now_ms = int(time.time() * 1000)
+        # Throttle HTTP polling
+        if self._use_http_api_for_control and (now_ms - self._last_control_poll) < self._control_poll_interval_ms:
+            # skip polling to avoid overloading the HTTP server
+            return None
         if self._use_http_api_for_control:
             try:
                 status_data = self._http_get_status()
+                self._last_control_poll = int(time.time() * 1000)
                 if status_data and status_data.get('success') and status_data.get('data'):
                     data = status_data['data']
                     control = {
@@ -300,11 +351,13 @@ class RTWebAdapter:
                     }
                     return control
                 return None
-            except Exception:
+            except Exception as e:
                 # 回退到 C 绑定
+                print("[RTWeb] ⚠️ pull_control HTTP API 请求失败:", e)
                 try:
                     return rtsmart_web.get_control()
-                except:
+                except Exception as e2:
+                    print("[RTWeb] ⚠️ 回退至 C 绑定时失败:", e2)
                     return None
         else:
             try:

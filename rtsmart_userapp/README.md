@@ -122,7 +122,8 @@ from rtsmart_web_adapter import RTWebAdapter
 from yolo_controller import YOLOController
 
 # 初始化
-web_adapter = RTWebAdapter(quality=75)
+# 推荐：禁用 HTTP API 控制读取（改为直接使用 C 绑定），并限制 control poll 频率与推帧速率
+web_adapter = RTWebAdapter(quality=75, control_poll_interval_ms=5000, use_http_api_for_control=False, min_push_interval_ms=100)
 yolo_controller = YOLOController()
 
 # 设置帧回调（YOLO 检测完后推送）
@@ -173,7 +174,7 @@ print(stats)  # {'ready': True, 'port': 8080}
 from rtsmart_web_adapter import RTWebAdapter
 
 # 创建适配器
-adapter = RTWebAdapter(quality=75)
+adapter = RTWebAdapter(quality=75, control_poll_interval_ms=5000, use_http_api_for_control=False, min_push_interval_ms=100)
 
 # 推送帧（由 YOLO 回调）
 adapter.update_frame(image)

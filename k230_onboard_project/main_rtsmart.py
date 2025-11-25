@@ -40,7 +40,10 @@ def main():
         return
 
     # 3. 初始化 Web 适配器与 YOLO
-    web_adapter = RTWebAdapter(quality=50)  # 降低 JPEG 质量提升推送稳定性
+    # 减少 control poll 请求频率，避免设备中频繁的 HTTP 连接超时
+    # Prefer the C binding for reading controls to avoid HTTP timeouts in constrained environments
+    # 限制推帧速度：例如 min_push_interval_ms=100 -> 最多 10fps
+    web_adapter = RTWebAdapter(quality=50, control_poll_interval_ms=5000, use_http_api_for_control=False, min_push_interval_ms=100)
     yolo = YOLOController()
     yolo.set_frame_callback(web_adapter.update_frame)
 
