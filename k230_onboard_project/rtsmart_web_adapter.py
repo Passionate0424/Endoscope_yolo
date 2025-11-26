@@ -343,8 +343,8 @@ class RTWebAdapter:
             return
         try:
             rtsmart_web.set_runtime(camera_running, detection_enabled, confidence)
-            print("[RTWeb] ✅ 已更新运行状态: camera=%s, detection=%s, confidence=%.2f" % 
-                  (camera_running, detection_enabled, confidence))
+            # print("[RTWeb] ✅ 已更新运行状态: camera=%s, detection=%s, confidence=%.2f" % 
+            #       (camera_running, detection_enabled, confidence))
         except Exception as e:
             print("[RTWeb] ⚠️ 更新运行状态失败:", e)
             import sys

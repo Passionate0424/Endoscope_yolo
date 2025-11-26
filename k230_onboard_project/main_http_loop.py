@@ -35,30 +35,86 @@ RECORD_CHECK_INTERVAL_MS = 1000  # 每秒检查一次记录删除/清空请求
 # ============================================
 def save_detection_records(results, detection_manager, save_img, threshold):
     """
-    保存检测记录
+    保存检测记录（兼容不同 YOLO 返回格式）
     
+    可以处理两类常见格式：
+    1) 列表字典格式：[{"bbox":[x,y,w,h], "confidence":0.9}, ...]
+    2) 模型返回的元组/列表格式：(dets, ids, scores)，其中 dets=[[x,y,w,h],...], scores=[...]
+
     Args:
-        results: YOLO 检测结果列表
+        results: YOLO 检测结果（见上）
         detection_manager: 检测管理器实例
         save_img: 要保存的图像对象
         threshold: 置信度阈值
     """
-    if save_img is None:
+    if save_img is None or results is None:
         return
-    
-    for result in results:
-        confidence = result.get('confidence', 0.0)
-        if confidence >= threshold:
-            bbox = result.get('bbox', [0, 0, 0, 0])
-            try:
-                detection_manager.add_detection(
-                    image=save_img,
-                    bbox=bbox,
-                    confidence=confidence
-                )
-            except Exception as e:
-                # 保存失败不影响主流程，静默处理
-                pass
+
+    try:
+        # 1) 处理字典列表格式
+        if isinstance(results, (list, tuple)) and len(results) > 0 and hasattr(results[0], 'get'):
+            for result in results:
+                confidence = float(result.get('confidence', 0.0))
+                if confidence >= threshold:
+                    bbox = result.get('bbox', [0, 0, 0, 0])
+                    try:
+                        rec_id = detection_manager.add_detection(image=save_img, bbox=bbox, confidence=confidence)
+                        if rec_id:
+                            print(f"[检测管理] 已保存记录 id={rec_id}, 置信度={confidence:.2f}, bbox={bbox}")
+                    except Exception as e:
+                        # 保存失败不影响主流程
+                        print(f"[检测管理] 保存检测记录异常: {e}")
+                        pass
+            return
+
+        # 2) 处理 (dets, ids, scores) 格式：dets 为 list, scores 为 list/array
+        if isinstance(results, (list, tuple)) and len(results) >= 3:
+            dets = results[0]
+            scores = results[2]
+            # dets 可能为空
+            if dets:
+                for i, bbox in enumerate(dets):
+                    try:
+                        confidence = float(scores[i]) if (scores is not None and i < len(scores)) else 0.0
+                    except Exception:
+                        confidence = 0.0
+                    if confidence >= threshold:
+                        try:
+                            rec_id = detection_manager.add_detection(image=save_img, bbox=bbox, confidence=confidence)
+                            if rec_id:
+                                print(f"[检测管理] 已保存记录 id={rec_id}, 置信度={confidence:.2f}, bbox={bbox}")
+                        except Exception as e:
+                            print(f"[检测管理] 保存检测记录异常: {e}")
+                            # 保存失败不影响主流程
+                            pass
+                return
+
+        # 3) 兼容：results 为 (dets, scores) 之类简化格式
+        if isinstance(results, (list, tuple)) and len(results) == 2:
+            dets = results[0]
+            scores = results[1]
+            if dets:
+                for i, bbox in enumerate(dets):
+                    try:
+                        confidence = float(scores[i]) if (scores is not None and i < len(scores)) else 0.0
+                    except Exception:
+                        confidence = 0.0
+                    if confidence >= threshold:
+                        try:
+                            rec_id = detection_manager.add_detection(image=save_img, bbox=bbox, confidence=confidence)
+                            if rec_id:
+                                print(f"[检测管理] 已保存记录 id={rec_id}, 置信度={confidence:.2f}, bbox={bbox}")
+                        except Exception as e:
+                            print(f"[检测管理] 保存检测记录异常: {e}")
+                            pass
+            return
+    except Exception as e:
+        # 出现未知格式或处理异常，打印调试信息（但不阻塞主流程）
+        try:
+            print("[检测管理] 保存检测记录失败，解析results时异常: ", e)
+        except Exception:
+            pass
+        return
 
 
 def init_web_adapter(quality=50):
@@ -188,6 +244,11 @@ def main():
                     try:
                         from media.sensor import CAM_CHN_ID_2
                         save_img = pl.sensor.snapshot(chn=CAM_CHN_ID_2)
+                        # Debug: print type and results summary
+                        try:
+                            print(f"[检测管理] 尝试保存 snapshot（通道2），结果类型={type(save_img)}, 检测数量={len(results) if results else 0}")
+                        except Exception:
+                            pass
                         save_detection_records(results, detection_manager, save_img, DETECTION_SAVE_THRESHOLD)
                     except Exception as e:
                         if total_detections <= 3:
@@ -218,6 +279,10 @@ def main():
                     
                     # 保存检测记录(使用同一张图像)
                     if detection_enabled and results:
+                        try:
+                            print(f"[检测管理] 尝试保存推流图像（通道0），结果类型={type(stream_img)}, 检测数量={len(results) if results else 0}")
+                        except Exception:
+                            pass
                         save_detection_records(results, detection_manager, stream_img, DETECTION_SAVE_THRESHOLD)
                 except Exception as err:
                     if total_frames % 30 == 0:
