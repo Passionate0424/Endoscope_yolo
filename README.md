@@ -10,10 +10,13 @@
 
 ## 📸 演示 (Demo)
 
-![实时演示 GIF](docs/657dedcb22e3aa132cada19f42237632 (1).gif)
+![alt text](<docs/657dedcb22e3aa132cada19f42237632 (1).gif>)
+
 *浏览器端实时预览（YOLO 检测 + MJPEG 推流）*
+
 ![alt text](docs/image-1.png)
 *web界面
+
 ---
 
 ## 🚀 快速开始
