@@ -1,14 +1,58 @@
 from building import *
 
 cwd = GetCurrentDir()
-CPPPATH = [cwd, cwd + "/include"]
+# 使用绝对路径，避免相对层级不一致导致 -I 丢失
+CPPPATH = [
+    cwd,
+    cwd + "/include",
+    cwd + "/yolo_ref",
+    cwd + "/yolo_ref/nncase",
+    cwd + "/yolo_ref/opencv2",
+    cwd + "/yolo_ref/mpp_comm",
+    "/root/canmv_k230_c_firmware/src/rtsmart/mpp/include",
+    "/root/canmv_k230_c_firmware/src/rtsmart/mpp/include/comm",
+    "/root/canmv_k230_c_firmware/src/rtsmart/rtsmart/kernel/include",
+    "/root/canmv_k230_c_firmware/src/rtsmart/rtsmart/kernel/rt-thread/include",
+    "/root/canmv_k230_c_firmware/src/rtsmart/libs/nncase/riscv64/nncase/include",
+    "/root/canmv_k230_c_firmware/src/rtsmart/libs/opencv/include/opencv4",
+]
 
-# HTTP 服务器源文件
-src = Glob("http_service.c")
+# Core sources: root-level C (e.g. main.c), HTTP stack, and yolo_ref
+src = Glob("*.c")
 src += Glob("src/*.c")
 src += Glob("src/*.cpp")
+src += Glob("yolo_ref/*.c")
+src += Glob("yolo_ref/*.cc")
+src += Glob("yolo_ref/*.cpp")
 
-group = DefineGroup("app_http_server", src, depend = [""], CPPPATH = CPPPATH)
+LIBPATH = [
+    "/root/canmv_k230_c_firmware/src/rtsmart/libs/nncase/riscv64/nncase/lib",
+    "/root/canmv_k230_c_firmware/src/rtsmart/libs/opencv/lib",
+]
+LIBS = [
+    "Nncase.Runtime.Native",
+    "functional_k230",
+    "nncase.rt_modules.k230",
+    "opencv_core",
+    "opencv_imgproc",
+    "opencv_imgcodecs",
+    "opencv_videoio",
+    "opencv_highgui",
+]
+
+print("[SConscript] CPPPATH =", CPPPATH)
+print("[SConscript] LIBPATH =", LIBPATH)
+print("[SConscript] LIBS    =", LIBS)
+
+try:
+    Import('Env')
+    Env.AppendUnique(CPPPATH = CPPPATH)
+    Env.AppendUnique(LIBPATH = LIBPATH)
+    Env.AppendUnique(LIBS    = LIBS)
+except Exception:
+    pass
+
+group = DefineGroup("app_http_server", src, depend = [""], CPPPATH = CPPPATH, LOCAL_CPPPATH = CPPPATH, LIBS=LIBS, LIBPATH=LIBPATH)
 
 objs = [group]
 

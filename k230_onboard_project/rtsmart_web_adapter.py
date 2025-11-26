@@ -109,6 +109,34 @@ class RTWebAdapter:
         except Exception:
             pass
 
+    def _normalize_control_payload(self, payload, source="unknown"):
+        """
+        将底层返回的控制数据标准化为 dict。
+        兼容以下情况：
+        - dict（首选格式）
+        - list/tuple，其中第一个元素是 dict
+        - list/tuple，可被 dict() 构造器转换为字典
+        """
+        if payload is None:
+            return None
+        if isinstance(payload, dict):
+            return payload
+        if isinstance(payload, (list, tuple)):
+            if not payload:
+                return None
+            first = payload[0]
+            if isinstance(first, dict):
+                return first
+            try:
+                return dict(payload)
+            except Exception:
+                pass
+        try:
+            print("[RTWeb] ⚠️ 无法解析控制数据(%s): %s" % (source, str(payload)))
+        except Exception:
+            print("[RTWeb] ⚠️ 无法解析控制数据(%s)" % source)
+        return None
+
     def update_frame(self, image):
         """
         由推流逻辑调用，将帧推送到 C 端 HTTP MJPEG 缓冲
@@ -162,7 +190,19 @@ class RTWebAdapter:
                 return
             # If image is an image.Image (official API), compress and push
             if hasattr(image, 'compress'):
-                jpeg_bytes = image.compress(quality=self.quality)
+                try:
+                    # 尝试直接压缩(RGB888/ARGB8888等格式支持)
+                    jpeg_bytes = image.compress(quality=self.quality)
+                except Exception as e:
+                    # YUV420SP等格式可能不支持直接compress,先转RGB888
+                    if self._frame_count < 3:
+                        print("[RTWeb] ⚠️ 直接压缩失败(%s),尝试转换为RGB888" % str(e))
+                    try:
+                        rgb_img = image.to_rgb888()
+                        jpeg_bytes = rgb_img.compress(quality=self.quality)
+                    except Exception as e2:
+                        print("[RTWeb] ❌ 转换RGB888后压缩也失败: %s" % str(e2))
+                        return
             else:
                 # Unsupported type: do not attempt complex ndarray conversions here
                 print("[RTWeb] ⚠️ Unsupported frame type: %s. Pass `image.Image` or JPEG bytes (image.compress())." % type(image))
@@ -355,16 +395,19 @@ class RTWebAdapter:
                 # 回退到 C 绑定
                 print("[RTWeb] ⚠️ pull_control HTTP API 请求失败:", e)
                 try:
-                    return rtsmart_web.get_control()
+                    raw = rtsmart_web.get_control()
+                    return self._normalize_control_payload(raw, source="C API fallback")
                 except Exception as e2:
                     print("[RTWeb] ⚠️ 回退至 C 绑定时失败:", e2)
                     return None
         else:
             try:
-                control = rtsmart_web.get_control()
+                raw = rtsmart_web.get_control()
+                control = self._normalize_control_payload(raw, source="C API")
                 if control is None:
-                    print("[RTWeb] ⚠️ get_control() 返回 None")
-                elif 'command_version' not in control:
+                    print("[RTWeb] ⚠️ get_control() 返回空数据")
+                    return None
+                if 'command_version' not in control:
                     print("[RTWeb] ⚠️ 控制信息中缺少 command_version 字段: %s" % str(control))
                 return control
             except Exception as e:
