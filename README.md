@@ -70,15 +70,15 @@
 
 ```mermaid
 graph LR
-    subgraph K230_Big_Core [K230 大核 (RT-Smart)]
-        subgraph Python_VM [MicroPython 进程]
+    subgraph K230_Big_Core["K230 大核 (RT-Smart)"]
+        subgraph Python_VM["MicroPython 进程"]
             A[摄像头采集] --> B[YOLO 推理]
             B --> C[OSD 绘图]
             C --> D[JPEG 压缩]
             D -->|memcpy| E((C语言环形缓冲))
         end
         
-        subgraph C_Extension [Native C 线程]
+        subgraph C_Extension["Native C 线程"]
             E -->|读取最新帧| F[HTTP Worker 线程]
             F -->|Socket Send| G[浏览器端]
         end
