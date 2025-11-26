@@ -44,6 +44,8 @@
   // 初始值：使用系统默认（通常8KB）
   // 第一次修改：32KB
   #define PTHREAD_STACK_SIZE (32 * 1024)
+
+> 另：本次出现“花屏/彩格”问题的专门记录已补充到 `docs/DEBUGGING_HTTP_YOLO_FLOWER_SCREEN.md`，包含修复要点和示例代码片段。
   
   // 第二次修改：64KB
   #define PTHREAD_STACK_SIZE (64 * 1024)

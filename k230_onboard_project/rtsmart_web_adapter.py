@@ -33,7 +33,7 @@ class RTWebAdapter:
     - min_push_interval_ms: 推帧的最小间隔（毫秒），用于限制推送速度，避免后端/网络瓶颈
     """
     
-    def __init__(self, quality=75, http_api_host="127.0.0.1", http_api_port=8080, control_poll_interval_ms=1000, use_http_api_for_control=True, min_push_interval_ms=0):
+    def __init__(self, quality=75, http_api_host="127.0.0.1", http_api_port=8080, control_poll_interval_ms=1000, use_http_api_for_control=True, min_push_interval_ms=0, debug_verbose=False):
         self.quality = quality
         self.use_c_server = HAS_C_SERVER
         # No ndarray conversion; adapter expects image.Image or JPEG bytes
@@ -47,6 +47,8 @@ class RTWebAdapter:
         self._control_poll_interval_ms = control_poll_interval_ms
         # 最小推帧间隔 (ms)，大于 0 时启用限速
         self._min_push_interval_ms = int(min_push_interval_ms)
+        # 是否启用详细调试日志
+        self.debug_verbose = bool(debug_verbose)
         
         # ⭐ HTTP API 配置（用于读取状态）
         # 
@@ -149,7 +151,7 @@ class RTWebAdapter:
 
         try:
             # Debug logging: incoming type and shape (only for first few frames)
-            if self._frame_count < 3:
+            if self._frame_count < 3 or self.debug_verbose:
                 try:
                     incoming_type = type(image)
                     incoming_shape = getattr(image, 'shape', None)
@@ -182,6 +184,8 @@ class RTWebAdapter:
                 except Exception:
                     pass
 
+                if self.debug_verbose:
+                    print(f"[RTWeb] 推送 JPEG bytes (已压缩), len={len(image)}")
                 rtsmart_web.push_frame(image)
                 self._last_push_time = int(time.time() * 1000)
                 self._frame_count += 1
@@ -193,13 +197,17 @@ class RTWebAdapter:
                 try:
                     # 尝试直接压缩(RGB888/ARGB8888等格式支持)
                     jpeg_bytes = image.compress(quality=self.quality)
+                    if self.debug_verbose:
+                        print("[RTWeb] 使用 image.compress() 成功生成 JPEG")
                 except Exception as e:
                     # YUV420SP等格式可能不支持直接compress,先转RGB888
-                    if self._frame_count < 3:
+                    if self._frame_count < 3 or self.debug_verbose:
                         print("[RTWeb] ⚠️ 直接压缩失败(%s),尝试转换为RGB888" % str(e))
                     try:
                         rgb_img = image.to_rgb888()
                         jpeg_bytes = rgb_img.compress(quality=self.quality)
+                        if self.debug_verbose:
+                            print("[RTWeb] 使用 to_rgb888() 转换并 compress 成功生成 JPEG")
                     except Exception as e2:
                         print("[RTWeb] ❌ 转换RGB888后压缩也失败: %s" % str(e2))
                         return

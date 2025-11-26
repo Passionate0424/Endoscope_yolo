@@ -7,6 +7,7 @@ class EndoscopeApp {
         this.cameraRunning = false;
         this.detectionEnabled = false;
         this.lastStatusResult = null;  // 保存最后一次状态查询结果
+        this._cachedRecords = [];
 
         this.init();
     }
@@ -464,7 +465,13 @@ class EndoscopeApp {
     async loadRecords() {
         const result = await this.apiCall('/api/records?limit=20');
         if (result.success) {
-            this.renderRecords(result.data);
+            // 缓存记录，供查找/下载等操作使用
+            try {
+                this._cachedRecords = Array.isArray(result.data) ? result.data : [];
+            } catch (e) {
+                this._cachedRecords = [];
+            }
+            this.renderRecords(this._cachedRecords);
         }
     }
 
@@ -482,7 +489,7 @@ class EndoscopeApp {
             const confidence = (record.confidence * 100).toFixed(1);
             html += `
                 <div class="detection-item" data-id="${record.id}">
-                    <img src="/detections/${record.filename}" class="detection-thumb" alt="检测图像">
+                    <img src="/detections/${encodeURIComponent(record.filename)}" class="detection-thumb" alt="检测图像">
                     <div class="detection-info">
                         <div class="detection-time">${record.time_str}</div>
                         <span class="detection-confidence">置信度: ${confidence}%</span>
@@ -504,8 +511,11 @@ class EndoscopeApp {
         const record = this.findRecord(id);
         if (record) {
             const link = document.createElement('a');
-            link.href = `/detections/${record.filename}`;
+            link.href = `/detections/${encodeURIComponent(record.filename)}`;
             link.download = record.filename;
+            // Fallback: open in a new tab if browser ignores download attribute
+            link.target = '_blank';
+            link.rel = 'noopener';
             link.click();
         }
     }
@@ -567,7 +577,11 @@ class EndoscopeApp {
 
     // 查找记录（缓存）
     findRecord(id) {
-        // 这里简化处理，实际应该从API获取
+        if (!this._cachedRecords || !Array.isArray(this._cachedRecords)) return null;
+        for (let i = 0; i < this._cachedRecords.length; i++) {
+            const rec = this._cachedRecords[i];
+            if (rec && (rec.id === id || String(rec.id) === String(id))) return rec;
+        }
         return null;
     }
 }

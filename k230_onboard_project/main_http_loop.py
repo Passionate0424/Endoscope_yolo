@@ -117,7 +117,32 @@ def save_detection_records(results, detection_manager, save_img, threshold):
         return
 
 
-def init_web_adapter(quality=50):
+def get_stream_image(pl, detection_enabled=False, overlay_osd=True):
+    """
+    从 PipeLine 获取用于推流的 image.Image 对象（优先使用通道0）
+    Args:
+        pl: PipeLine 实例
+        detection_enabled: 如果 True，则尝试叠加 pl.osd_img
+        overlay_osd: 是否在输出图像上叠加 OSD
+    Returns:
+        image.Image 或 None
+    """
+    try:
+        from media.sensor import CAM_CHN_ID_0
+        img = pl.sensor.snapshot(chn=CAM_CHN_ID_0)
+        # 叠加 OSD 图层（检测框）
+        if overlay_osd and detection_enabled and getattr(pl, 'osd_img', None) is not None:
+            try:
+                img.draw_image(pl.osd_img, 0, 0, alpha=256)
+            except Exception:
+                pass
+        return img
+    except Exception as e:
+        print(f"[HTTP] 获取 stream 图像失败: {e}")
+        return None
+
+
+def init_web_adapter(quality=50, debug_verbose=False):
     """
     初始化 Web 适配器，支持新旧版本兼容
     
@@ -133,11 +158,12 @@ def init_web_adapter(quality=50):
             control_poll_interval_ms=5000,
             use_http_api_for_control=False,
             min_push_interval_ms=100
+            ,debug_verbose=debug_verbose
         )
     except TypeError:
         # 兼容旧版本：只使用基本参数
         print("[HTTP] ⚠️ 使用兼容模式初始化RTWebAdapter（旧版本不支持新参数）")
-        web = RTWebAdapter(quality=quality)
+        web = RTWebAdapter(quality=quality, debug_verbose=debug_verbose)
         # 如果支持setter方法，尝试设置
         if hasattr(web, 'set_control_poll_interval'):
             web.set_control_poll_interval(5000)
@@ -164,7 +190,7 @@ def main():
     print("[HTTP] 服务器已启动")
 
     # 初始化 Web 适配器
-    web = init_web_adapter(quality=50)
+    web = init_web_adapter(quality=50, debug_verbose=True)
 
     # 初始化检测记录管理器
     detection_manager = DetectionManager(save_dir='/data/detections', max_records=100)
@@ -264,26 +290,20 @@ def main():
             # ----------------------------------------
             if stream_enabled:
                 try:
-                    # 使用通道0直接获取 YUV420SP 格式(显示分辨率),JPEG编码器可以直接处理
-                    from media.sensor import CAM_CHN_ID_0
-                    stream_img = pl.sensor.snapshot(chn=CAM_CHN_ID_0)
-                    
-                    # 将 OSD 层的检测框绘制到推流图像上
-                    if detection_enabled and pl.osd_img is not None:
-                        stream_img.draw_image(pl.osd_img, 0, 0, alpha=256)
-                    
-                    web.update_frame(stream_img)
-                    
-                    if total_frames <= 3:
-                        print(f"[HTTP] ✅ 使用通道0 YUV420SP 直接推流, 尺寸: {stream_img.width()}x{stream_img.height()}")
-                    
-                    # 保存检测记录(使用同一张图像)
-                    if detection_enabled and results:
-                        try:
-                            print(f"[检测管理] 尝试保存推流图像（通道0），结果类型={type(stream_img)}, 检测数量={len(results) if results else 0}")
-                        except Exception:
-                            pass
-                        save_detection_records(results, detection_manager, stream_img, DETECTION_SAVE_THRESHOLD)
+                    # 从 helper 获取用于推流的 image.Image
+                    stream_img = get_stream_image(pl, detection_enabled=detection_enabled, overlay_osd=True)
+                    if stream_img is not None:
+                        web.update_frame(stream_img)
+                        if total_frames <= 3:
+                            try:
+                                print(f"[HTTP] ✅ 使用 helper 获取并推流, 尺寸: {stream_img.width()}x{stream_img.height()}")
+                            except Exception:
+                                print(f"[HTTP] ✅ 使用 helper 获取并推流")
+                        # 保存检测记录(使用同一张图像)
+                        if detection_enabled and results:
+                            save_detection_records(results, detection_manager, stream_img, DETECTION_SAVE_THRESHOLD)
+                    elif total_frames % 30 == 0:
+                        print("[HTTP] ⚠️ 无法获取有效的image.Image对象用于推流")
                 except Exception as err:
                     if total_frames % 30 == 0:
                         print("[HTTP] 推帧失败：", err)
