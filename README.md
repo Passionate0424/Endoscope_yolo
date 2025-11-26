@@ -108,6 +108,24 @@ graph LR
 
 ---
 
+## 📚 docs 文档指南（快速导航）
+
+本仓库在 `docs/` 下包含不少技术文档，下面是一个快速导航，帮助你根据需求快速定位：
+
+- `docs/PROJECT_DESIGN_HTTP_YOLO.md` — 系统架构与设计说明（从整体角度解释 C/Python 混合架构与数据流水线）。
+- `docs/SDK_INTEGRATION_HTTP_MICROPY.md` — 将 HTTP Server 移植到 MicroPython 用户态的说明与关键改动（如果你想在 MicroPython 中运行 HTTP 服务，请查看）。
+- `docs/README_TRAINING.md` — YOLOv5 训练指南（训练数据组织、脚本与常用命令）。
+- `docs/README_K230_EXPORT.md` — 模型导出与转换为 `kmodel` 的步骤（onnx 导出、量化、nncase 编译等）。
+- `docs/KMODEL_CONVERSION_COMPLETE.md` — 转换完成后的产物说明与部署要点（完成后验证与部署）。。
+
+如何使用这些文档（建议顺序）:
+1. 若你想训练模型：参阅 `docs/README_TRAINING.md` -> 训练后使用 `docs/README_K230_EXPORT.md` 转换为 kmodel。 
+2. 若你要部署/测试：将 `build/k230/*.kmodel` 放到设备 `/data/`，并遵循 `README.md` 中的部署步骤；同时检查 `docs/KMODEL_CONVERSION_COMPLETE.md` 以确认后处理与输入规格。
+3. 若你要编译固件或修改 C 层：参阅 `docs/SDK_INTEGRATION_MODIFICATIONS.md` 和 `docs/SDK_INTEGRATION_HTTP_MICROPY.md`，并结合 `docs/HTTP_SERVER_IMPLEMENTATION.md` 理解
+
+
+---
+
 ## 🔌 HTTP API 接口
 
 C 层服务器监听 **8080** 端口，提供以下接口：
