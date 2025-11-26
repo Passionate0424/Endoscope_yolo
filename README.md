@@ -11,6 +11,16 @@
 
 ---
 
+## 演示（Demo）
+
+以下为项目运行的示例截图与实时演示动画（来自 `docs/` 目录）：
+
+![实时演示 GIF](<docs/657dedcb22e3aa132cada19f42237632 (1).gif>)
+
+![设备界面截图](docs/image-1.png)
+
+---
+
 ## 快速开始
 
 ### 阶段 1：模型准备（PC 端）
@@ -66,6 +76,52 @@
   - 访问地址：`http://<K230_IP>:8080`
   - MJPEG 实时流：`http://<K230_IP>:8080/stream`
   - 图像快照：`http://<K230_IP>:8080/snapshot`
+
+---
+
+## 设计亮点（概要）
+
+本仓库的实现基于《PROJECT_DESIGN_HTTP_YOLO.md》设计文档，主要技术要点如下：
+
+- **C / Python 混合架构（大核 + 小核协作）**：将网络 I/O（HTTP Server、MJPEG 推流）与高频 Socket 处理下沉到大核 C 层（RT-Smart），而将 AI 推理、OSD 绘制与业务逻辑保留在 MicroPython 小核（C906）。这避免了 MicroPython 的 GIL 对推理/网络并发的影响。
+- **环形帧缓冲（Ring Frame Buffer）**：C 层维护一个环形帧缓冲区，用于承载已经压缩好的 JPEG 帧（固定数量的槽位）。Python 端只做压缩并 push，C 层做读取与发送，保证生产消费解耦与低延迟。
+- **微型 Python C 扩展（rtsmart_web）**：通过自定义 MicroPython 模块（`rtsmart_web`），Python 在内存层直接 memcpy 到 C 层缓冲区，避免额外的内存拷贝开销；同时提供 `get_control`/`pull_control` 等 API 实现前端控制与状态同步。
+- **低延迟 HTTP 服务（线程池 + Reactor）**：C 层使用 accept 线程 + worker 线程池模型，减少频繁创建/销毁线程开销，提升嵌入式环境的稳定性与并发处理能力。
+- **推流节流与压缩策略**：`rtsmart_web_adapter.py` 负责压缩、智能节流（避免浏览器处理瓶颈）与推帧策略（始终发送最新一帧），平衡实时性与带宽。
+- **显式内存回收与异常管理**：MicroPython 主循环显式调用 `gc.collect()`，并在主循环外包裹 `try/except/finally` 做资源释放，保证长期稳定运行。
+
+> 这些更改与实现细节请参见 `docs/PROJECT_DESIGN_HTTP_YOLO.md`（设计文档），以及 `rtsmart_userapp/`、`k230_onboard_project/` 目录下的源码。
+
+---
+
+## 数据流水线（简述）
+
+1. 摄像头采集原始帧（小核）
+2. AI 推理（YOLOv5/KModel，在小核）
+3. OSD 绘制与 JPEG 压缩（小核）
+4. Python 通过 `rtsmart_web.push_frame()` 将 JPEG bytes 写入 C 层的环形帧缓冲（memcpy）
+5. C 层的 HTTP Worker 读取最新帧并推送给浏览器（/stream）
+
+该流水线保证了“生产者（小核）/消费者（大核）”的解耦，使推理与网络发送互不阻塞。
+
+---
+
+## HTTP API（常用端点）
+
+以下是 HTTP 服务提供的常见端点（在大核监听 8080 端口）：
+
+- `/stream`：MJPEG 实时视频流
+- `/snapshot`：单帧 JPEG 快照
+- `/api/status`：JSON 格式的系统与检测状态（FPS、检测计数等）
+- `/api/control`：控制接口（如启/停检测、调整置信度门限），Python 小核通过 `rtsmart_web.pull_control()` 轮询获取控制指令
+
+---
+
+## 部署要点（简要）
+
+- 构建包含 C 层 HTTP Server 需要在 RT-Smart 的构建系统内整合 `rtsmart_userapp/src/` 源码；请在 WSL 环境中按照 `docs/PROJECT_DESIGN_HTTP_YOLO.md` 或 `docs/README_K230_EXPORT.md` 描述的步骤将源文件复制进 SDK 对应目录并修改 Makefile/SConscript。
+- 将生成的固件烧写进 SD 卡后，将 `k230_onboard_project/` 下的 Python 代码放入 K230 `/data/` 分区，将 `model.kmodel` 放入 `/data/`，使用 `python /data/main_rtsmart.py` 启动完整功能（推荐）。
+
 
 ---
 
