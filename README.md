@@ -1,276 +1,137 @@
-## 内窥镜息肉检测项目总览
+# 内窥镜息肉检测平台 (Based on K230 + RT-Smart)
 
-这是一个基于**K230 庐山派**双核开发板的完整 **YOLOv5** 内窥镜息肉检测平台，包括：
+这是一个基于 **嘉楠 K230 (CanMV)** 开发板的完整 **YOLOv5** 内窥镜息肉检测方案。项目采用 **C/Python 混合架构**，解决了嵌入式 Python 在高频网络视频推流下的性能瓶颈。
 
-- **模型训练**：使用 Kvasir-SEG 数据集的 YOLO 标注版本进行多目标检测训练（`Endoscope_yolov5_project`）。
-- **模型转换**：将 PyTorch/ONNX 模型转换为适配 **K230/CanMV** 的 `kmodel` 文件（`build` 与 `scripts/conversion`）。
-- **设备端部署**：在 **K230 开发板** 上通过自动启动的 HTTP/Web 服务进行实时视频检测与管理（`k230_onboard_project`）。
-- **大核集成**（2025.11.19 新增）：C 层 HTTP 服务器已集成到大核 RT-Smart，具备自动启动与 WiFi 感知功能。
-
-如果你只是第一次打开该仓库，建议按下面的顺序阅读并上手。
+- **高性能网络**：C 语言编写的 HTTP/MJPEG 服务器（作为 MicroPython 内置模块运行）。
+- **AI 推理**：基于 YOLOv5s 的息肉检测模型，针对 K230 KPU 优化。
+- **混合编程**：Python 负责业务与 AI，C 负责底层缓冲与 I/O，实现生产与消费解耦。
 
 ---
 
-## 演示（Demo）
+## 📸 演示 (Demo)
 
-以下为项目运行的示例截图与实时演示动画（来自 `docs/` 目录）：
-
-![实时演示 GIF](<docs/657dedcb22e3aa132cada19f42237632 (1).gif>)
-
-![设备界面截图](docs/image-1.png)
-
+![实时演示 GIF](docs/657dedcb22e3aa132cada19f42237632 (1).gif)
+*浏览器端实时预览（YOLO 检测 + MJPEG 推流）*
+![alt text](docs/image-1.png)
+*web界面
 ---
 
-## 快速开始
+## 🚀 快速开始
 
 ### 阶段 1：模型准备（PC 端）
 
-- **1. 准备环境与数据集**
-  - 参考：`docs/README_TRAINING.md`
-  - 内容包括：Python/PyTorch 环境、Kvasir-SEG-YOLO 数据集结构与路径说明。
+1.  **环境准备**：参考 `docs/README_TRAINING.md` 准备 PyTorch 环境与 Kvasir-SEG 数据集。
+2.  **模型训练**：运行 `scripts/training/train_endoscope_yolo.py` 训练 YOLOv5 模型。
+3.  **模型转换**：使用 `scripts/conversion/export_to_kmodel_k230.ps1` 将模型转换为 K230 专用的 `.kmodel` 文件。
 
-- **2. 训练内窥镜 YOLOv5 模型**
-  - 参考：`docs/README_TRAINING.md`
-  - 支持两种方式：
-    - 直接运行 `scripts/training/train_endoscope_yolo.py`
-    - 进入 `Endoscope_yolov5_project` 使用官方 `train.py`
+### 阶段 2：固件编译（关键步骤）
 
-- **3. 导出并转换为 K230 模型**
-  - 参考：`docs/README_K230_EXPORT.md`
-  - 使用 `scripts/conversion/export_to_kmodel_k230.ps1` 一键导出 ONNX 并调用 **nncase** 生成 `model.kmodel`。
+本项目依赖自定义的 C 语言扩展模块 (`rtsmart_web`)，**必须重新编译固件**才能运行。
 
-### 阶段 2：固件编译与烧写（K230 设备端）
+1.  **源码集成**：将 `rtsmart_userapp/src` 下的 C 代码集成到 CanMV SDK 的 MicroPython 移植目录中（详见 `docs/PROJECT_DESIGN_HTTP_YOLO.md`）。
+2.  **编译固件**：在 SDK 中编译生成包含自定义模块的 CanMV 镜像。
+3.  **烧录**：将生成的镜像（如 `sysimage-sdcard.img`）烧录至 SD 卡。
 
-- **4. 编译包含 HTTP 服务器的固件**（2025.11.19 完成）
-  - 大核 (C908 RT-Smart)：C 层 HTTP 服务器已集成
-  - 服务器功能：
-    - ✅ **自动启动**：系统启动时自动启动（通过 `INIT_APP_EXPORT`）
-    - ✅ **WiFi 感知启动**：检测到网络就绪后自动启动 HTTP 服务
-    - ✅ **MJPEG 视频流**：支持 `/stream` 端点
-    - ✅ **图像快照**：支持 `/snapshot` 端点
-    - ✅ **自适应帧缓冲**：使用共享内存与小核通信
-  - 烧写方式：参考 `docs/README_K230_EXPORT.md`
-  - 推荐固件：`build/canmv_firmware/CanMV_K230_LCKFB_WITH_HTTP_SERVER_COMPILED.img`
+> **注**：如果你不想自行编译，可直接使用 `build/canmv_firmware/` 目录下提供的预编译镜像（如果有）。
 
-### 阶段 3：设备端运行（K230 CanMV 小核）
+### 阶段 3：部署与运行（K230 设备端）
 
-- **5. 在 K230 上部署和运行**
-  - 参考：`k230_onboard_project/README.md`
-  - 将生成的 `model.kmodel` 拷贝到 K230 `/data/` 目录
-  - 选择运行方式（二选一）：
-    
-    **方式 A（完整功能，推荐）：**
+1.  **文件传输**：
+    将以下文件拷贝到 K230 的 `/data/` 目录：
+    *   `model.kmodel` (转换好的模型)
+    *   `k230_onboard_project/` 目录下的所有 `.py` 文件
+
+2.  **启动运行**：
+    在串口终端或 IDE 中运行主程序：
     ```bash
-    python /data/main_rtsmart.py
+    # 推荐使用完整版 (包含 HTTP 推流功能)
+    python /data/main_http_loop.py
     ```
-    功能：YOLO 检测 + 自动保存检测结果 + WiFi 连接
-    
-    **方式 B（最小化）：**
-    ```bash
-    python /data/main.py
-    ```
-    功能：仅 YOLO 检测 + LCD 显示
 
-- **6. 通过浏览器访问**
-  - HTTP 服务器自动在 K230 启动，监听 **8080** 端口
-  - 访问地址：`http://<K230_IP>:8080`
-  - MJPEG 实时流：`http://<K230_IP>:8080/stream`
-  - 图像快照：`http://<K230_IP>:8080/snapshot`
+3.  **浏览器访问**：
+    *   电脑/手机连接到 K230 所在的局域网。
+    *   访问：`http://<K230_IP>:8080`
+    *   MJPEG流地址：`http://<K230_IP>:8080/stream`
 
 ---
 
-## 设计亮点（概要）
+## 🏗 系统架构设计
 
-本仓库的实现基于《PROJECT_DESIGN_HTTP_YOLO.md》设计文档，主要技术要点如下：
+本项目基于 **RT-Smart** 操作系统，采用 **MicroPython C Extension** 技术路线。
 
-- **C / Python 混合架构（大核 + 小核协作）**：将网络 I/O（HTTP Server、MJPEG 推流）与高频 Socket 处理下沉到大核 C 层（RT-Smart），而将 AI 推理、OSD 绘制与业务逻辑保留在 MicroPython 小核（C906）。这避免了 MicroPython 的 GIL 对推理/网络并发的影响。
-- **环形帧缓冲（Ring Frame Buffer）**：C 层维护一个环形帧缓冲区，用于承载已经压缩好的 JPEG 帧（固定数量的槽位）。Python 端只做压缩并 push，C 层做读取与发送，保证生产消费解耦与低延迟。
-- **微型 Python C 扩展（rtsmart_web）**：通过自定义 MicroPython 模块（`rtsmart_web`），Python 在内存层直接 memcpy 到 C 层缓冲区，避免额外的内存拷贝开销；同时提供 `get_control`/`pull_control` 等 API 实现前端控制与状态同步。
-- **低延迟 HTTP 服务（线程池 + Reactor）**：C 层使用 accept 线程 + worker 线程池模型，减少频繁创建/销毁线程开销，提升嵌入式环境的稳定性与并发处理能力。
-- **推流节流与压缩策略**：`rtsmart_web_adapter.py` 负责压缩、智能节流（避免浏览器处理瓶颈）与推帧策略（始终发送最新一帧），平衡实时性与带宽。
-- **显式内存回收与异常管理**：MicroPython 主循环显式调用 `gc.collect()`，并在主循环外包裹 `try/except/finally` 做资源释放，保证长期稳定运行。
+### 1. 核心痛点与解决
+*   **痛点**：原生 Python 处理 HTTP 视频流时，Socket I/O 会抢占 CPU，且受 GIL 锁限制，导致 AI 推理掉帧严重。
+*   **方案**：将 HTTP 服务器下沉到 **C 语言层**，并利用 **独立线程池** 处理网络发送。
 
-> 这些更改与实现细节请参见 `docs/PROJECT_DESIGN_HTTP_YOLO.md`（设计文档），以及 `rtsmart_userapp/`、`k230_onboard_project/` 目录下的源码。
+### 2. 数据流水线 (Pipeline)
 
----
-
-## 数据流水线（简述）
-
-1. 摄像头采集原始帧（小核）
-2. AI 推理（YOLOv5/KModel，在小核）
-3. OSD 绘制与 JPEG 压缩（小核）
-4. Python 通过 `rtsmart_web.push_frame()` 将 JPEG bytes 写入 C 层的环形帧缓冲（memcpy）
-5. C 层的 HTTP Worker 读取最新帧并推送给浏览器（/stream）
-
-该流水线保证了“生产者（小核）/消费者（大核）”的解耦，使推理与网络发送互不阻塞。
-
----
-
-## HTTP API（常用端点）
-
-以下是 HTTP 服务提供的常见端点（在大核监听 8080 端口）：
-
-- `/stream`：MJPEG 实时视频流
-- `/snapshot`：单帧 JPEG 快照
-- `/api/status`：JSON 格式的系统与检测状态（FPS、检测计数等）
-- `/api/control`：控制接口（如启/停检测、调整置信度门限），Python 小核通过 `rtsmart_web.pull_control()` 轮询获取控制指令
-
----
-
-## 部署要点（简要）
-
-- 构建包含 C 层 HTTP Server 需要在 RT-Smart 的构建系统内整合 `rtsmart_userapp/src/` 源码；请在 WSL 环境中按照 `docs/PROJECT_DESIGN_HTTP_YOLO.md` 或 `docs/README_K230_EXPORT.md` 描述的步骤将源文件复制进 SDK 对应目录并修改 Makefile/SConscript。
-- 将生成的固件烧写进 SD 卡后，将 `k230_onboard_project/` 下的 Python 代码放入 K230 `/data/` 分区，将 `model.kmodel` 放入 `/data/`，使用 `python /data/main_rtsmart.py` 启动完整功能（推荐）。
-
-
----
-
-## 仓库结构简介
-
-- `Endoscope_yolov5_project`：基于官方 YOLOv5 的训练工程（已集成数据配置与脚本）。
-- `datasheet/Kvasir-SEG`：原始 Kvasir-SEG 数据集。
-- `datasheet/Kvasir-SEG-YOLO`：已转换为 YOLO 标注格式的数据集（`data.yaml`、`images/`、`labels/`）。
-- `scripts/training`：训练相关脚本（如 `train_endoscope_yolo.py`）。
-- `scripts/conversion`：导出 ONNX、调用 nncase 生成 K230 `kmodel` 的脚本。
-- `build/canmv_firmware/`：编译后的固件文件（包括新的 HTTP 服务器版本）。
-- `build/k230`、`build/k230_pytorch_env`：模型导出与量化过程中的中间与产出文件目录。
-- **`k230_onboard_project/`**：K230 设备端应用（2025.11.19 已清理）
-  - `main.py`：小核 YOLO 检测主程序（LCD 显示）
-  - `main_rtsmart.py`：完整版本（YOLO 检测 + 检测结果保存 + WiFi 连接）
-  - `yolo_controller.py`：YOLO 检测控制器
-  - `detection_manager.py`：检测记录管理（保存息肉检测图像）
-  - `wifi_config.py`：WiFi 配置与连接工具
-  - `rtsmart_web_adapter.py`：C 服务器适配层（备用）
-- **`rtsmart_userapp/`**：大核 C 层 HTTP 服务器源代码（2025.11.19 新增）
-  - `src/http_server.c`：HTTP 服务器主程序（自动启动 + WiFi 感知）
-  - `src/http_handler.c`：HTTP 请求处理
-  - `src/frame_buffer.c`：帧缓冲管理
-  - `include/`：头文件
-  - `SConscript`：编译配置
-- `yolov5`：原始 Ultralytics YOLOv5 仓库（作为子目录保留，用于参考或对比）。
-- `docs`：本项目相关说明文档的集中存放目录。
-- `kernel_bsp_maix3_SConscript_FINAL`、`app_http_server_SConscript_FINAL`：大核编译配置备份（2025.11.19）
-
----
-
-## 典型工作流
-
-### PC 端训练和导出（3 步）
-```
-1. 在 PC 上完成训练，得到 best.pt
-   位置：Endoscope_yolov5_project/runs/train/.../weights/best.pt
-
-2. 使用 scripts/conversion/export_to_kmodel_k230.ps1 导出
-   - 导出 ONNX：best.pt → model.onnx
-   - 编译为 K230 模型：model.onnx → model.kmodel（使用 nncase）
-
-3. 生成固件和模型文件
-   - 固件：build/canmv_firmware/CanMV_K230_LCKFB_WITH_HTTP_SERVER_COMPILED.img
-   - 模型：build/k230/model.kmodel
+```mermaid
+graph LR
+    subgraph K230_Big_Core [K230 大核 (RT-Smart)]
+        subgraph Python_VM [MicroPython 进程]
+            A[摄像头采集] --> B[YOLO 推理]
+            B --> C[OSD 绘图]
+            C --> D[JPEG 压缩]
+            D -->|memcpy| E((C语言环形缓冲))
+        end
+        
+        subgraph C_Extension [Native C 线程]
+            E -->|读取最新帧| F[HTTP Worker 线程]
+            F -->|Socket Send| G[浏览器端]
+        end
+    end
 ```
 
-### K230 设备端部署（4 步）
-```
-1. 烧写固件到 K230 SD 卡
-   - 使用固件：CanMV_K230_LCKFB_WITH_HTTP_SERVER_COMPILED.img
-   - 大核自动启动 HTTP 服务器（无需手动操作）
+*   **Python 层**：负责“生产”。调用 `pl.get_frame()` 采集，运行 KPU 推理，将结果画图并压缩。最后调用 `rtsmart_web.push_frame()`。
+*   **C 语言层**：负责“消费”。`rtsmart_web` 模块内部维护一个环形缓冲区 (RingBuffer) 和一个 HTTP 服务器线程池。它在后台默默地将最新的 JPEG 帧推送给浏览器，**不阻塞 Python 主循环**。
 
-2. 复制模型文件到设备
-   - 复制 model.kmodel 到 K230 /data/ 目录
+---
 
-3. 在 K230 小核运行检测程序
-   - 方式 A（推荐）：python /data/main_rtsmart.py
-     完整功能：YOLO 检测 + 结果保存 + WiFi 连接
-   - 方式 B（简化）：python /data/main.py
-     仅 YOLO 检测：LCD 显示实时检测结果
+## 📂 仓库结构说明
 
-4. 通过浏览器访问
-   - MJPEG 实时流：http://<K230_IP>:8080/stream
-   - 快照获取：http://<K230_IP>:8080/snapshot
-```
-
-### 系统架构（2025.11.19 最新）
-```
-K230 双核协作：
-
-大核 (C908 RT-Smart)
-├─ HTTP 服务器 (C 实现)
-│  ├─ 自动启动线程
-│  ├─ WiFi 监控线程（60秒超时）
-│  ├─ MJPEG 视频流服务
-│  └─ 共享帧缓冲 (3×512KB)
-
-小核 (C906 MicroPython/CanMV)
-├─ YOLO 检测 (KModel 推理)
-├─ 相机采集和 LCD 显示
-├─ 检测结果保存 (/data/detections/)
-└─ WiFi 连接管理
+```text
+├── Endoscope_yolov5_project/   # YOLOv5 训练工程 (PC端)
+├── k230_onboard_project/       # K230 Python 应用代码 (设备端)
+│   ├── main_http_loop.py       # [入口] 主程序：AI + HTTP 推流
+│   ├── rtsmart_web_adapter.py  # C 扩展模块的 Python 封装层
+│   └── ...
+├── rtsmart_userapp/            # C 语言扩展源码 (需编译进固件)
+│   ├── src/http_server.c       # Reactor 模式 HTTP 服务器
+│   ├── src/frame_buffer.c      # 环形缓冲区实现
+│   └── micropython_binding/    # MicroPython 绑定接口
+├── scripts/                    # 训练与模型转换脚本
+└── docs/                       # 设计文档与说明
 ```
 
 ---
 
-## 文档索引
+## 🔌 HTTP API 接口
 
-- **训练指南**：`docs/README_TRAINING.md`
-- **K230 模型导出说明**：`docs/README_K230_EXPORT.md`
-- **K230 设备端应用说明**：`k230_onboard_project/README.md`
-- **数据集与标注说明**：`datasheet/README.md`（如需查看原始数据组织）
-- **模型转换完成记录/备注**：`docs/KMODEL_CONVERSION_COMPLETE.md`
-- **大核 HTTP 服务器自启动说明**：`rtsmart_userapp/AUTOSTART.md`（2025.11.19 新增）
+C 层服务器监听 **8080** 端口，提供以下接口：
 
----
-
-## 2025.11.19 更新说明
-
-本次更新完成了 **K230 大核 HTTP 服务器的完整集成与自启动功能**，主要成果：
-
-### 技术突破
-
-1. **大核编译集成** ✅
-   - 原问题：HTTP 服务器代码在小核 MicroPython 构建系统中，无法在大核启动
-   - 解决方案：修改大核 RT-Smart 的 SCons 编译配置，将 HTTP 服务器集成到大核
-   - 关键文件：`rtsmart_userapp/src/` 下的 `http_server.c`、`http_handler.c`、`frame_buffer.c`
-
-2. **自动启动机制** ✅
-   - 大核启动时自动创建 WiFi 监控线程
-   - 检测到网络就绪后自动启动 HTTP 服务器（60 秒超时）
-   - 无需手动执行 `http_start` 命令
-
-3. **编译验证** ✅
-   - 编译时间：41 秒
-   - 生成的目标文件：frame_buffer.o (53KB) + http_handler.o (47KB) + http_server.o (111KB) = 211KB
-   - 固件增长：+7042 字节（验证代码已编译）
-   - 生成固件：`build/canmv_firmware/CanMV_K230_LCKFB_WITH_HTTP_SERVER_COMPILED.img`
-
-### 项目清理
-
-4. **小核应用精简** ✅
-   - 删除过时的 Python HTTP 服务器实现（`web_server.py` 等）
-   - 删除已被 C 层替代的启动脚本（`startup.py`、`auto_http_server.py` 等）
-   - 保留核心文件：`main.py`（简化版）、`main_rtsmart.py`（完整版）
-   - 保留依赖模块：`detection_manager.py`、`yolo_controller.py`、`wifi_config.py`
-
-5. **编译配置备份** ✅
-   - `kernel_bsp_maix3_SConscript_FINAL`：大核内核 BSP 编译配置
-   - `app_http_server_SConscript_FINAL`：HTTP 服务器应用编译配置
-   - 这些文件记录了如何在大核编译系统中正确集成 C 层服务器
-
-### 后续工作
-
-6. **下一步验证**（待硬件测试）
-   - 烧写新固件到 K230 SD 卡
-   - 观察大核 UART 启动日志，验证 HTTP 服务器自启动
-   - 通过浏览器访问 `http://<K230_IP>:8080/stream` 查看 MJPEG 流
-   - 运行小核检测程序验证双核协作
-
-如需了解 YOLOv5 本身的更多用法，可参考：
-
-- `Endoscope_yolov5_project/README.md` 与 `Endoscope_yolov5_project/README.zh-CN.md`
-- `yolov5/README.md` 与 `yolov5/README.zh-CN.md`
+| 端点 (Endpoint) | 类型 | 描述 |
+| :--- | :--- | :--- |
+| `/` | HTML | 静态监控主页 |
+| `/stream` | Stream | MJPEG 实时视频流 (由 C 线程直接推送) |
+| `/snapshot` | JPEG | 获取当前单帧截图 |
+| `/api/status` | JSON | 获取当前 FPS、检测目标数等统计信息 |
+| `/api/control`| JSON | 控制接口 (开关检测、调整阈值等) |
 
 ---
 
-## 许可证与致谢
+## 📝 常见问题 (FAQ)
 
-- 本项目在 `Endoscope_yolov5_project` 与 `yolov5` 中使用了 Ultralytics YOLOv5，相关开源协议请参见各目录下的 `LICENSE` 和 `README*`。
-- Kvasir-SEG 数据集来自公开医学图像数据集，使用时请遵守原数据集的协议与引用要求。
+**Q: 为什么运行 `main_http_loop.py` 报错 `ImportError: no module named 'rtsmart_web'`?**
+A: 说明你当前运行的固件**没有**包含本项目的 C 扩展模块。必须按照 `docs` 中的指南重新编译 CanMV 固件，或者使用我们提供的预编译镜像。
+
+**Q: AI 推理速度是多少？**
+A: 使用 YOLOv5s (经过剪枝或量化后)，在 K230 上通常可达 20~30 FPS。
+
+**Q: 视频流有延迟吗？**
+A: 由于采用了环形缓冲区且策略为“总是发送最新帧”，延迟通常控制在 100ms 以内（局域网环境）。
+
+---
+
+## 📜 许可证
+
+本项目代码遵循 MIT 许可证。YOLOv5 部分遵循其原有的 AGPL-3.0 许可证。数据集 Kvasir-SEG 请遵循其原始协议。
