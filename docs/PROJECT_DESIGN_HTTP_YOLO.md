@@ -47,15 +47,27 @@
 
 ```mermaid
 graph LR
-    Cam[摄像头采集] -->|Raw Image| Pre[预处理 & AI推理]
-    Pre -->|检测框| OSD[OSD 绘图]
-    OSD -->|Compress| JPG[JPEG 图像]
-    JPG -->|1. push_frame()| RingBuf((C层环形缓冲))
-    
-    subgraph C_Layer_Server
-    RingBuf -->|2. fetch_latest| Worker[HTTP Worker线程]
-    Worker -->|3. send()| Browser[医生端浏览器]
+    %% MicroPython Producer (Python 层)
+    subgraph Python_VM["MicroPython 进程 (Python 层)"]
+        Cam[摄像头采集] -->|Raw Image| Pre[预处理 & AI 推理]
+        Pre -->|检测框| OSD[OSD 绘图]
+        OSD -->|JPEG 压缩| JPG[JPEG 图像]
+        JPG -->|1. rtsmart_web_push_frame| RingBuf((C 环形缓冲 - RingBuffer))
+        %% Python 更新统计 & 拉取控制
+        PythonUpd[Python: update_stats_remote] --> WebState
+        WebState[web_state - C 层状态] -->|pull_control / get_control| PythonPoll[Python: pull_control]
     end
+
+    %% C Extension Consumer (Native C 线程)
+    subgraph C_Extension["Native C (rtsmart_web) 线程池"]
+        RingBuf -->|2. fetch latest| Worker[HTTP Worker 线程]
+        Worker -->|3. Socket send| Browser[浏览器端]
+        Browser -->|/api/control| WebState
+    end
+
+    %% 连接 Python 和 C 层的控制交互路径
+    PythonUpd --- WebState
+    WebState --- PythonPoll
 ```
 
 这种架构实现了**生产与消费的解耦**：Python 只需要把图扔进缓冲区就可以继续下一帧推理，不用等待缓慢的网络发送完成。
