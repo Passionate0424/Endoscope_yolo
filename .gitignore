@@ -18,7 +18,7 @@ build/
 
 # Virtual environments
 .venv*
-venv*/
+dist/
 ENV*/
 
 # IDE

@@ -1,0 +1,11 @@
+# Use Git LFS for build artifacts
+# Track all files inside the repo's build/ directory with LFS
+build/** filter=lfs diff=lfs merge=lfs -text
+
+# Track common binary build extensions explicitly (optional)
+*.img filter=lfs diff=lfs merge=lfs -text
+*.gz filter=lfs diff=lfs merge=lfs -text
+*.zip filter=lfs diff=lfs merge=lfs -text
+*.tar.gz filter=lfs diff=lfs merge=lfs -text
+*.bin filter=lfs diff=lfs merge=lfs -text
+*.kmodel filter=lfs diff=lfs merge=lfs -text
